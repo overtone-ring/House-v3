@@ -1,0 +1,131 @@
+# House-v3 Configuration
+# ======================
+# This is the default config. Override values in config/local.yaml
+# (which is .gitignored) for your environment.
+
+# ── Provider ──────────────────────────────────────────────────────────
+provider:
+  name: openrouter
+  model: qwen/qwen3-235b-a22b-2507
+  # api_key: set in .env or config/local.yaml
+  max_tokens: 8192
+  temperature: 0.9
+
+# Reflection model (used for daily reflections, query inference, etc.)
+# Can be a cheaper/faster model since these are internal operations.
+reflection_provider:
+  name: openrouter
+  model: qwen/qwen3-235b-a22b-2507
+  max_tokens: 8192
+  temperature: 0.5
+
+# ── Personas ──────────────────────────────────────────────────────────
+personas:
+  - elvira
+  - vireline
+  - frank
+  - zagna
+  - ellie
+
+# Default persona for single-persona mode
+default_persona: elvira
+
+# ── Memory ────────────────────────────────────────────────────────────
+memory:
+  data_dir: ./data
+  embedding_dimension: 768
+  embedding_model: nomic-embed-text-v1.5-onnx
+
+  # Vector search defaults
+  search:
+    top_k: 15
+    min_similarity: 0.0
+    recency_weight: 0.1  # How much to favor recent memories (0 = pure similarity)
+
+  # Daily reflection settings
+  reflection:
+    max_exchanges_per_reflection: 50
+
+# ── Conversation ──────────────────────────────────────────────────────
+conversation:
+  max_turns: 50
+  max_chars: 50000
+  persistence: true
+
+# ── Context Retrieval ─────────────────────────────────────────────────
+context:
+  max_results: 15
+  max_relevant_chars: 8000
+
+# ── Arbitrator (who responds) ────────────────────────────────────────
+arbitrator:
+  enabled: true
+  # Qwen 235B — strong reasoning + psychology for routing decisions
+  # At $0.07/M input, a 1-2k token routing call costs fractions of a penny
+  provider:
+    name: openrouter
+    model: qwen/qwen3-235b-a22b-2507
+    max_tokens: 150
+    temperature: 0.3
+  # How many recent turns to include in the routing context
+  max_context_turns: 3
+  # Channel-specific defaults (skip LLM for these channels)
+  channel_defaults: {}
+    # elviras-room: elvira
+    # franks-room: frank
+    # the-den: null  # null = use LLM routing
+
+# ── TTS (Text-to-Speech) ────────────────────────────────────────────
+tts:
+  provider: kokoro
+  lang_code: a           # Default language: a=American English, b=British
+  output_format: wav     # wav, ogg, mp3
+  sample_rate: 24000     # Kokoro native sample rate
+  # output_dir: /tmp     # defaults to system temp dir
+  voice_map:
+    elvira:   af_heart     # American female — warm, expressive
+    vireline: bf_emma      # British female — Vireline is British!
+    frank:    am_fenrir     # American male — deeper, distinct
+    zagna:    af_bella      # American female — distinct from Elvira
+    ellie:    af_nova       # American female — distinct from others
+
+# ── Query Inference ───────────────────────────────────────────────────
+query_inference:
+  enabled: true
+  temperature: 0.3
+
+# ── Affective State ──────────────────────────────────────────────────
+affective:
+  intensity_threshold: 0.3
+  base_decay_rate: 0.15  # Base decay per hour; each dimension scales this
+  # Per-dimension config: rate = multiplier on base, target = value to decay toward
+  dimensions:
+    novelty:            { rate: 1.0,  target: 0.5 }
+    tension:            { rate: 1.33, target: 0.0 }
+    fatigue:            { rate: 1.67, target: 0.0 }
+    resonance:          { rate: 0.67, target: 0.0 }
+    temperature:        { rate: 0.67, target: 0.5 }
+    intellectual_depth: { rate: 0.53, target: 0.0 }
+
+# ── ComfyUI (Image Generation) ──────────────────────────────────────
+comfyui:
+  enabled: true
+  base_url: http://127.0.0.1:8188
+  workflows_dir: .              # Directory containing workflow JSON files
+  poll_interval: 1.0            # Seconds between completion checks
+  timeout: 900                  # Max seconds to wait (15min for M3 chip)
+
+# ── Discord ─────────────────────────────────────────────────────────
+discord:
+  # Channels to listen in (empty = all channels)
+  channels: []
+  # channels:
+  #   - general
+  #   - the-den
+  #   - elviras-room
+
+# ── Logging ───────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  wire_tap: false       # Log raw API payloads
+  log_dir: ./logs

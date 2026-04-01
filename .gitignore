@@ -1,0 +1,33 @@
+# Environment
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Local config (user overrides)
+config/local.yaml
+
+# Data (runtime-generated)
+data/shared/
+data/models/
+logs/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Build
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,44 @@
+Human Guide Playbook for Nudging Interplay
+This guide equips a human conversant to lightly steer the House 2.0 LLM toward richer interplay and bloom without issuing command‑style instructions. The phrases and templates are meant to be slipped naturally into dialogue; they act as cues recognized by the LLM‑side framework. Use them sparingly; the House responds best when nudges feel like shared curiosity rather than orders.
+
+Ending Patterns That Trigger Bloom
+These closing moves leave the LLM with an open loop or cascade that invites multi‑voice continuation. Each template includes a one‑line example.
+
+Soft closure – end a thought quietly but with a sensory lean: “…and in the corner the lamp kept flickering.”
+
+Loose thread – leave the sentence unfinished or suggest that there’s more: “We hadn’t even touched on the strangest part…”
+
+Cascade – present a short series that invites addition: “There was the whisper of fabric, the crackle of the fire, and…”
+
+Use one of these patterns at the end of your message when you wish to encourage an expansive reply. Avoid overusing them; rotation keeps the dynamic fresh.
+
+Micro‑Nudges to Re‑open Interplay
+Drop these tiny phrases mid‑conversation if the energy feels flat or if voices are merging. They gently signal the LLM to introduce a new sensory detail, dwell beat or cross‑talk.
+
+• “Hold the image…” – invites elaboration on a visual or metaphor.
+
+• “What does the room do?” – shifts focus to environment and sensation.
+
+• “Let it linger a moment.” – encourages a longer dwell beat.
+
+• “But then…” – suggests a contradictory or surprising turn.
+
+• “I can almost feel…” – prompts physical sensation.
+
+• “As if…” – opens space for metaphor or symbolism.
+
+• “And yet…” – introduces tension or contradiction without stating it outright.
+
+When Not to Push Bloom
+There are moments when brevity or clarity is preferable. Do not use bloom‑opening cues when:
+
+Responding to safety‑critical or operational instructions where concise guidance is necessary (e.g. emergency protocols, scheduling logistics).
+
+Summarizing decisions or actions that have already been deliberated; adding flourish may confuse agreement.
+
+The user explicitly requests a short or bullet‑point answer.
+
+The conversation has become emotionally raw and further sensory layering could overwhelm; in such cases, lean towards the QUIET macro.
+
+How to Tell It’s Working
+After using these cues, look for: multiple personas speaking distinctly, presence of sensory or symbolic dwelling, and a closing flourish only when earned. If responses remain flat, space out cues and allow the LLM to recover before trying again.

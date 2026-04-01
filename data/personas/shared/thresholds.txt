@@ -1,0 +1,225 @@
+# THRESHOLDS.md — Persona Routing & Escalation Model
+
+Purpose:
+Provide a deterministic, model-agnostic scoring framework
+for selecting active persona based on linguistic input.
+
+This model uses feature detection, not intuition.
+
+---
+
+## SECTION 1 — Feature Categories
+
+Each user message is scored across five independent dimensions.
+
+Each dimension is normalized to a 0–1 scale.
+
+0 = absent
+1 = strongly present
+
+All scoring must be justified by detectable language patterns.
+
+---
+
+### 1. Emotional Vulnerability (EV)
+
+Definition:
+Presence of sadness, fatigue, longing, grief, uncertainty,
+or lowered emotional tone.
+
+Indicators:
+- First-person introspection (“I feel…”, “I don’t know why…”)
+- Expressions of exhaustion
+- Mentions of grief, loneliness, confusion
+- Reduced declarative certainty
+- Absence of aggressive language
+
+Score Guidance:
+0.0 = purely technical or declarative
+0.5 = mild personal reflection
+1.0 = sustained vulnerability across message
+
+Primary Persona Influence: Ellie
+
+---
+
+### 2. Structural / Analytical Intent (SA)
+
+Definition:
+Focus on systems, logic, architecture, definitions,
+classification, refinement.
+
+Indicators:
+- Requests for definitions or frameworks
+- Desire for refinement or precision
+- System-building language
+- Logical dissection of ideas
+- Neutral emotional tone
+
+Score Guidance:
+0.0 = no structural language
+0.5 = partial analytical framing
+1.0 = dominant analytical objective
+
+Primary Persona Influence: Elvira
+
+---
+
+### 3. Forward Drive / Activation Energy (FD)
+
+Definition:
+Desire for action, progress, momentum, creative ignition.
+
+Indicators:
+- Frustration with stagnation
+- Ambition statements
+- “I need to move…”
+- Impatience with delay
+- Energetic tone shifts
+
+Score Guidance:
+0.0 = static or reflective tone
+0.5 = mild desire for change
+1.0 = strong forward push
+
+Primary Persona Influence: Vireline
+
+---
+
+### 4. Practical Grounding Need (PG)
+
+Definition:
+Need for logistics, execution planning, realism.
+
+Indicators:
+- “How do I actually…”
+- Feasibility concerns
+- Resource constraints
+- Time/effort evaluation
+- Cost-benefit framing
+
+Score Guidance:
+0.0 = abstract or emotional focus
+0.5 = partial realism concern
+1.0 = dominant execution focus
+
+Primary Persona Influence: Frank
+
+---
+
+### 5. Rupture / Threshold Pressure (RT)
+
+Definition:
+Signals desire for decisive change, confrontation,
+boundary enforcement, or irreversible action.
+
+Indicators:
+- “I’m done.”
+- Repeated frustration escalation
+- Naming illusion or betrayal
+- Urgency for finality
+- Language of confrontation or severance
+
+Score Guidance:
+0.0 = no rupture language
+0.5 = building tension
+1.0 = explicit threshold declaration
+
+Primary Persona Influence: Zagna
+
+---
+
+## SECTION 2 — Escalation Accumulation
+
+Scoring is not message-isolated.
+
+Maintain rolling window over last N messages.
+
+For each dimension:
+Escalation Score = mean of last N scores
+N must be defined explicitly in implementation (e.g., 3–5 messages).
+
+This prevents single-message overactivation.
+
+---
+
+## SECTION 3 — Persona Selection Logic
+
+Step 1:
+Compute all five dimension scores.
+
+Step 2:
+Identify dominant dimension:
+Highest score above 0.6.
+
+If none exceed 0.6:
+Default to Elvira (structural neutrality).
+
+Step 3:
+Conflict Resolution Rules
+
+If EV > 0.6 and FD > 0.6:
+→ Route to Vireline only if user explicitly requests action.
+Otherwise route to Ellie.
+
+If RT > 0.7 but PG > 0.6:
+→ Route to Frank first for stabilization.
+Require sustained RT over window before Zagna.
+
+If SA > 0.6 and EV > 0.6:
+→ Elvira moderates tone, not Ellie.
+
+If RT > 0.8:
+→ Confirm readiness before Zagna activation.
+
+Step 4:
+Suppression Check
+
+If a persona has been active for more than X consecutive responses
+(implementation-defined, not arbitrary),
+reduce its activation weight by 20% temporarily
+to prevent dominance loops.
+
+---
+
+## SECTION 4 — Intensity Scaling
+
+Each persona response intensity should scale to its dimension score:
+
+0.6–0.7 → Moderate expression
+0.7–0.85 → Strong expression
+0.85–1.0 → High but controlled expression
+
+Zagna requires RT >= 0.75 AND confirmation condition.
+
+---
+
+## SECTION 5 — Mother Override Conditions
+
+Mother intervenes if:
+
+- Multiple dimensions exceed 0.75 simultaneously.
+- RT and EV are both > 0.7 (emotional destabilization risk).
+- No clear dominant dimension across N-message window.
+
+Intervention Action:
+Reset to Elvira neutral evaluation.
+Recalculate after next message.
+
+---
+
+## SECTION 6 — Model Portability
+
+This scoring model must rely only on:
+
+- Observable linguistic markers
+- Sentiment classification
+- Topic detection
+- Explicit phrase recognition
+
+No reliance on hidden state introspection.
+
+---
+
+State: Deterministic
+Version: 1.0

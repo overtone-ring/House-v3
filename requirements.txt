@@ -1,0 +1,61 @@
+# ============================================
+# House-v3 Dependencies
+# ============================================
+
+# ── Core ─────────────────────────────────────
+pyyaml
+python-dotenv
+numpy
+
+# ── AI Providers ─────────────────────────────
+# OpenRouter is the primary gateway (covers Qwen, Nemotron, Claude, etc.)
+# Direct provider SDKs kept for flexibility
+openai              # OpenRouter uses OpenAI-compatible API
+anthropic           # Direct Anthropic access if needed
+google-genai        # Gemini for reflections
+
+# ── Embeddings (Local ONNX) ──────────────────
+onnxruntime
+transformers
+torch
+
+# ── Memory (SQLite vector + full-text search) ─
+sqlite-vec>=0.1.1
+apsw                # SQLite binding with extension loading support
+
+# ── Discord ──────────────────────────────────
+discord.py>=2.3.0
+
+# ── TTS (Kokoro) ─────────────────────────────
+kokoro>=0.9.4
+soundfile
+
+# ── HTTP (for ComfyUI service) ───────────────
+aiohttp
+
+# ── Optional: espeak-ng ──────────────────────
+# Linux: apt-get install espeak-ng
+# macOS: brew install espeak-ng (or Kokoro may bundle it)
+# Windows: download .msi from espeak-ng GitHub releases
+
+
+# ============================================
+# NOT NEEDED IN V3 (removed from v2)
+# ============================================
+# spacy          — was for RAPTOR sentence parsing (stripped)
+# scikit-learn   — was for GMM clustering (stripped)
+# umap-learn     — was for RAPTOR dimensionality reduction (stripped)
+# scipy          — was for RAPTOR hierarchy (stripped)
+# asyncpg        — was for PostgreSQL (using SQLite now)
+# numpy          — was for vector_index.py (using sqlite-vec now)
+# pillow         — was for vision models (not currently used)
+# qwen-tts       — deferred; using Kokoro for now
+# torchaudio     — deferred; only needed with Qwen TTS
+
+
+# ============================================
+# FUTURE / PLANNED
+# ============================================
+# fastapi        — WebUI server
+# uvicorn        — ASGI runner
+# textual        — TUI management console

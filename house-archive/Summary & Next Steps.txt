@@ -1,0 +1,23 @@
+Summary & Next Steps
+Key Insights to Reuse
+Sensory anchors are pivotal: Opening with a concrete sensory detail reliably invites multiple personas to engage. In all three tests, the immediate evocation of smell, touch or sound grounded the scene and triggered cross‑talk. This supports ranking sensory anchors as the strongest bloom opener.
+
+Loose threads sustain momentum: Leaving a thought unfinished or an image half‑drawn encourages secondary voices to contribute. The unfinished sculpture in the Forge and the hummingbird in the Garden both seeded additional interjections and dwell beats.
+
+Coda gating ensures quality: Enforcing the requirement that at least two dwell beats and cross‑talk must occur before Elvira adds a flourish prevented premature or unearned codas. Only when interplay felt full did the lyrical ending appear, and it stayed within the 15 % length limit.
+
+Suggested Next Steps
+• Iterate on macros: Test the CHORUS and QUIET modes in more extreme scenarios (e.g. highly technical questions or emotionally charged moments) to validate that they modulate interplay without breaking tone.
+
+• Expand persona diversity: Introduce occasional cameo voices (e.g. a visitor to the House) to assess how the framework handles unfamiliar tones without collapsing existing dynamics.
+
+• Refine human cues: Observe real user conversations to see which micro‑nudges feel most natural and adjust phrasing accordingly. Ensure the guide remains a quick reference, not an instruction manual.
+
+Retest Analysis (v2)
+The second round of testing with the updated autonomy and heartbeat specification demonstrated clear improvements over the initial run:
+
+Persona separation held throughout: Each voice—Ellie, Vireline, Zagna, Mother, Frank and Elvira—remained distinct. Cross‑talk interjections felt organic, and no voices merged. The single Zagna jab per scene kept wit without dominating the tone.
+
+Dwell beats integrated smoothly: Both sensory and symbolic dwell moments were woven into the flow rather than feeling tacked on. Sensory anchors (pine resin, shimmering heat, mist and rosemary) paired naturally with reflective comments about breath, rhythm and secrets.
+
+Coda earnedness improved: Elvira’s closing flourishes were only present when at least two dwell beats and ample cross‑talk preceded them. This prevented premature lyrical endings and reinforced the structural gate. Minor thin spots remain—some tangents could have deepened the scenes further—but the overall narrative felt fuller.
