@@ -9,8 +9,12 @@ __pycache__/
 config/local.yaml
 
 # Data (runtime-generated)
+data/memory.db*
+data/sessions/
+data/state/
 data/shared/
 data/models/
+data/discord_watch_state.json
 logs/
 
 # OS
