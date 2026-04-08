@@ -17,7 +17,7 @@ Flow:
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .providers import create_provider_from_config
 from .providers.base import BaseProvider
@@ -72,7 +72,7 @@ class UnifiedOrchestrator:
         self._provider = create_provider_from_config(provider_config)
 
         # State manager
-        state_path = self.config.get("memory", {}).get("data_dir", "./data") + "/state"
+        state_path = str(Path(self.config.get("memory", {}).get("data_dir", "./data")) / "state")
         self._state_manager = get_state_manager(state_path, self.config)
 
         # Memory service per persona (they share the same SQLite store)

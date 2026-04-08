@@ -57,6 +57,15 @@ You need:
    - Enable **Privileged Gateway Intents**: toggle on **Message Content Intent**
 4. Invite each bot to your server with the **bot** scope and **Send Messages**, **Read Message History** permissions
 
+## Verify setup
+
+Run the preflight check to make sure everything is wired up:
+```bash
+python scripts/preflight.py
+```
+
+This checks Python version, installed packages, sqlite-vec extension loading, embedding model, config, environment variables, and system dependencies.
+
 ## Run
 
 ```bash
@@ -73,6 +82,55 @@ Key settings:
 - `discord.channels` -- channels to listen in (empty = all)
 - `tts.provider` -- set to `kokoro` for voice, or remove to disable
 - `comfyui.enabled` -- image generation (requires local ComfyUI server)
+
+## Managing data
+
+### Discord slash commands (while bot is running)
+
+- `/reset_buffer #channel` -- Clear conversation history for a channel (fresh start)
+- `/status` -- Show bot status, memory stats, and active channels
+- `/watch #channel` / `/unwatch #channel` -- Add or remove channels the bot listens in
+- `/set_default #channel persona` -- Set a single persona to respond in a channel
+- `/clear_default #channel` -- Restore all personas responding in a channel
+
+### Scripts (run from House-v3 directory)
+
+```bash
+# Remove today's exchanges, reflections, conversation buffers, and affective state
+python scripts/reset.py today
+
+# Full factory reset -- deletes all memory, state, buffers, and logs
+python scripts/reset.py nuke
+
+# Skip confirmation prompt
+python scripts/reset.py nuke -y
+```
+
+### Direct database access
+
+The memory database is at `data/memory.db` (SQLite). You can inspect or edit it directly:
+
+```bash
+# View recent exchanges
+sqlite3 data/memory.db "SELECT persona_name, substr(user_msg, 1, 60), substr(assistant_response, 1, 60) FROM exchanges ORDER BY timestamp DESC LIMIT 10;"
+
+# Count exchanges per persona
+sqlite3 data/memory.db "SELECT persona_name, COUNT(*) FROM exchanges GROUP BY persona_name;"
+
+# Delete a specific exchange by ID
+sqlite3 data/memory.db "DELETE FROM exchanges WHERE id = 'some-id'; DELETE FROM exchanges_vec WHERE id = 'some-id';"
+```
+
+Note: when deleting exchanges manually, also delete the matching row from `exchanges_vec` (vector embeddings) and the FTS entry will be cleaned up automatically by triggers.
+
+## Troubleshooting
+
+- **Bot responds but all through one persona** -- JSON parsing failed. Check logs for `Could not parse JSON`. Usually a one-off model glitch; retry.
+- **"attempt to write a readonly database"** -- File permissions. Run `sudo chown -R $(whoami) data/`
+- **"Permission denied" on session files** -- Same fix: `sudo chown -R $(whoami) data/`
+- **Bot connects but doesn't respond to messages** -- Message Content Intent not enabled. Go to Discord Developer Portal > your bot > Bot > Privileged Gateway Intents > toggle on Message Content Intent.
+- **"Missing DISCORD_TOKEN_WATCHER in environment"** -- `.env` file missing or not in the right place. Must be in the House-v3 root directory.
+- **TTS not working** -- Install espeak-ng (`sudo apt install espeak-ng` on Linux, `brew install espeak-ng` on macOS). On Apple Silicon, also set `export PYTORCH_ENABLE_MPS_FALLBACK=1`.
 
 ## Architecture
 

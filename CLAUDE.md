@@ -114,6 +114,17 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 | `src/utils/io.py` | I/O utilities |
 | `src/utils/paths.py` | Path resolution helpers |
 | `src/utils/token_counter.py` | Token counting for context window management |
+| `scripts/preflight.py` | Pre-run environment verification (packages, config, tokens, model) |
+| `scripts/reset.py` | Data management — `nuke` (full reset) or `today` (remove today's data) |
+
+## Scripts
+
+```bash
+python scripts/preflight.py          # Verify setup before first run
+python scripts/reset.py today        # Remove today's exchanges, reflections, buffers, state
+python scripts/reset.py nuke         # Full factory reset (deletes all data + logs)
+python scripts/reset.py nuke -y      # Skip confirmation
+```
 
 ## Dependencies (non-obvious)
 

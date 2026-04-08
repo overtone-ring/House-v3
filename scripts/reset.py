@@ -11,12 +11,17 @@ Run from the House-v3 directory.
 """
 
 import argparse
-import json
 import os
 import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import apsw
+except ImportError:
+    print("ERROR: apsw not installed. Run: pip install apsw")
+    sys.exit(1)
 
 
 def load_config() -> dict:
@@ -36,18 +41,17 @@ def get_paths(config: dict) -> dict:
     """Resolve all data directories."""
     data_dir = Path(config.get("memory", {}).get("data_dir", "./data"))
     log_dir = Path(config.get("logging", {}).get("log_dir", "./logs"))
-    personas = config.get("personas", ["elvira", "vireline", "frank", "zagna", "ellie"])
 
     return {
         "data_dir": data_dir,
         "log_dir": log_dir,
-        "personas": personas,
+        "db_path": data_dir / "memory.db",
     }
 
 
 def confirm(action: str) -> bool:
     """Ask for confirmation."""
-    response = input(f"\n⚠️  This will {action}. Type 'yes' to confirm: ")
+    response = input(f"\nThis will {action}. Type 'yes' to confirm: ")
     return response.strip().lower() == "yes"
 
 
@@ -57,7 +61,7 @@ def nuke(config: dict, skip_confirm: bool = False) -> None:
     data_dir = paths["data_dir"]
     log_dir = paths["log_dir"]
 
-    print("🔥 NUKE — Full data reset")
+    print("NUKE — Full data reset")
     print(f"   Data dir:  {data_dir.resolve()}")
     print(f"   Log dir:   {log_dir.resolve()}")
 
@@ -83,158 +87,119 @@ def nuke(config: dict, skip_confirm: bool = False) -> None:
 
     for label, path in targets:
         shutil.rmtree(path)
-        print(f"   ✓ Deleted {label}: {path}")
+        print(f"   Deleted {label}: {path}")
 
-    print("\n✅ Full reset complete. House-v3 is a blank slate.")
+    print("\nFull reset complete. House-v3 is a blank slate.")
 
 
 def reset_today(config: dict, skip_confirm: bool = False) -> None:
     """Delete only today's data — exchanges, reflections, and buffers from today."""
     paths = get_paths(config)
     data_dir = paths["data_dir"]
-    personas = paths["personas"]
+    db_path = paths["db_path"]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    print(f"🗓️  RESET TODAY — Removing data from {today}")
-    print(f"   Data dir: {data_dir.resolve()}")
+    print(f"RESET TODAY — Removing data from {today}")
+    print(f"   Database: {db_path.resolve()}")
 
+    if not db_path.exists():
+        print("\n   No database found. Nothing to reset.")
+        return
+
+    conn = apsw.Connection(str(db_path))
     removed = {"exchanges": 0, "reflections": 0, "buffers": 0, "state": 0}
 
-    # ── Preview ──────────────────────────────────────────────
-    # Count exchanges from today
-    exchanges_file = data_dir / "shared" / "memory" / "exchanges.jsonl"
-    today_exchange_count = 0
-    if exchanges_file.exists():
-        with open(exchanges_file) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                    ts = record.get("timestamp", "")
-                    if ts.startswith(today):
-                        today_exchange_count += 1
-                except json.JSONDecodeError:
-                    continue
-    print(f"   Exchanges from today: {today_exchange_count}")
+    # Count what we'll remove
+    today_start = f"{today}T00:00:00"
+    today_end = f"{today}T23:59:59"
 
-    # Count reflections from today
-    today_reflection_count = 0
-    for persona in personas:
-        reflections_file = data_dir / persona / "memory" / "reflections.jsonl"
-        if reflections_file.exists():
-            with open(reflections_file) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                        if record.get("date", "") == today:
-                            today_reflection_count += 1
-                    except json.JSONDecodeError:
-                        continue
-    print(f"   Reflections from today: {today_reflection_count}")
+    exchange_count = conn.execute(
+        "SELECT COUNT(*) FROM exchanges WHERE timestamp BETWEEN ? AND ?",
+        (today_start, today_end),
+    ).fetchone()[0]
 
-    # Conversation buffers
+    reflection_count = conn.execute(
+        "SELECT COUNT(*) FROM reflections WHERE date = ?",
+        (today,),
+    ).fetchone()[0]
+
     sessions_dir = data_dir / "sessions"
     buffer_count = len(list(sessions_dir.glob("*_conversation.json"))) if sessions_dir.exists() else 0
+
+    print(f"   Exchanges from today: {exchange_count}")
+    print(f"   Reflections from today: {reflection_count}")
     print(f"   Active conversation buffers: {buffer_count}")
 
-    if today_exchange_count == 0 and today_reflection_count == 0 and buffer_count == 0:
+    if exchange_count == 0 and reflection_count == 0 and buffer_count == 0:
         print("\n   Nothing to reset for today.")
+        conn.close()
         return
 
     if not skip_confirm and not confirm(f"remove today's data ({today})"):
         print("   Cancelled.")
+        conn.close()
         return
 
-    # ── Remove today's exchanges ─────────────────────────────
-    if exchanges_file.exists() and today_exchange_count > 0:
-        kept_lines = []
-        with open(exchanges_file) as f:
-            for line in f:
-                line_stripped = line.strip()
-                if not line_stripped:
-                    continue
-                try:
-                    record = json.loads(line_stripped)
-                    ts = record.get("timestamp", "")
-                    if ts.startswith(today):
-                        removed["exchanges"] += 1
-                        continue
-                except json.JSONDecodeError:
-                    pass
-                kept_lines.append(line_stripped)
+    # Remove today's exchanges (FTS entries cleaned up by triggers)
+    if exchange_count > 0:
+        # Get IDs first for vec table cleanup
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM exchanges WHERE timestamp BETWEEN ? AND ?",
+            (today_start, today_end),
+        ).fetchall()]
 
-        with open(exchanges_file, "w") as f:
-            for line in kept_lines:
-                f.write(line + "\n")
+        conn.execute("BEGIN")
+        try:
+            conn.execute(
+                "DELETE FROM exchanges WHERE timestamp BETWEEN ? AND ?",
+                (today_start, today_end),
+            )
+            for eid in ids:
+                conn.execute("DELETE FROM exchanges_vec WHERE id = ?", (eid,))
+            conn.execute("COMMIT")
+            removed["exchanges"] = len(ids)
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            print(f"   ERROR removing exchanges: {e}")
 
-        # Invalidate exchange vector cache (will rebuild on next search)
-        _clear_vector_cache(data_dir / "shared" / "indexes", "exchanges")
+    # Remove today's reflections
+    if reflection_count > 0:
+        ids = [row[0] for row in conn.execute(
+            "SELECT id FROM reflections WHERE date = ?",
+            (today,),
+        ).fetchall()]
 
-    # ── Remove today's reflections ───────────────────────────
-    for persona in personas:
-        reflections_file = data_dir / persona / "memory" / "reflections.jsonl"
-        if not reflections_file.exists():
-            continue
+        conn.execute("BEGIN")
+        try:
+            conn.execute("DELETE FROM reflections WHERE date = ?", (today,))
+            for rid in ids:
+                conn.execute("DELETE FROM reflections_vec WHERE id = ?", (rid,))
+            conn.execute("COMMIT")
+            removed["reflections"] = len(ids)
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            print(f"   ERROR removing reflections: {e}")
 
-        kept_lines = []
-        with open(reflections_file) as f:
-            for line in f:
-                line_stripped = line.strip()
-                if not line_stripped:
-                    continue
-                try:
-                    record = json.loads(line_stripped)
-                    if record.get("date", "") == today:
-                        removed["reflections"] += 1
-                        continue
-                except json.JSONDecodeError:
-                    pass
-                kept_lines.append(line_stripped)
+    conn.close()
 
-        with open(reflections_file, "w") as f:
-            for line in kept_lines:
-                f.write(line + "\n")
-
-        # Invalidate persona vector cache
-        _clear_vector_cache(data_dir / persona / "indexes", "reflections")
-
-    # ── Clear conversation buffers ───────────────────────────
+    # Clear conversation buffers
     if sessions_dir.exists():
         for buf_file in sessions_dir.glob("*_conversation.json"):
             buf_file.unlink()
             removed["buffers"] += 1
 
-    # ── Clear today's state ──────────────────────────────────
+    # Clear affective state
     state_dir = data_dir / "state"
     if state_dir.exists():
-        for persona in personas:
-            persona_state = state_dir / persona
-            if persona_state.exists():
-                # Reset affective and engagement to defaults
-                for state_file in ["affective.json", "engagement.json"]:
-                    sf = persona_state / state_file
-                    if sf.exists():
-                        sf.unlink()
-                        removed["state"] += 1
+        for state_file in state_dir.rglob("*.json"):
+            state_file.unlink()
+            removed["state"] += 1
 
-    print(f"\n   ✓ Removed {removed['exchanges']} exchanges")
-    print(f"   ✓ Removed {removed['reflections']} reflections")
-    print(f"   ✓ Cleared {removed['buffers']} conversation buffers")
-    print(f"   ✓ Reset {removed['state']} state files")
-    print(f"\n✅ Today's data cleared. Historical data preserved.")
-
-
-def _clear_vector_cache(index_dir: Path, collection_name: str) -> None:
-    """Remove vector cache files so they rebuild on next search."""
-    for suffix in ["_vectors.npz", "_manifest.json"]:
-        cache_file = index_dir / f"{collection_name}{suffix}"
-        if cache_file.exists():
-            cache_file.unlink()
+    print(f"\n   Removed {removed['exchanges']} exchanges")
+    print(f"   Removed {removed['reflections']} reflections")
+    print(f"   Cleared {removed['buffers']} conversation buffers")
+    print(f"   Reset {removed['state']} state files")
+    print(f"\nToday's data cleared. Historical data preserved.")
 
 
 # ── CLI ──────────────────────────────────────────────────────────────
