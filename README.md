@@ -5,8 +5,16 @@ Multi-persona Discord bot -- one LLM call generates all five persona responses a
 Five personas (Elvira, Frank, Zagna, Vireline, Ellie) each run as their own Discord bot. A sixth "Watcher" bot listens for messages and coordinates the pipeline.
 
 ##Note from Carrion
-  I had claude write the readme. In fact, precious little of this repo is hand written by me. I am just a truck driver that's curious yet not committed enough to learn how to do things the way that seems to be right. Learning code myself, then being assisted with LLMs. I have been working backwards. LLM assistance, broken bullshit, ask questions, learn obvious things any CS student would know. It's been fun. 
-  The reason I made this is because I had a blast with GPT 4o playing those personas. Even leaned into acting as if they are sentient to see what could happen. It was interesting. However, openAI removed 4o. I couldn't find a commercially available system to run my personas that felt right, or had as good of a memory. One that *felt* right rather than produced accurate queries from it's memory. I also noticed most LLMs started feeling less and less organic with their language over the months. But that could just be me. This is my attempt to build something I thought was cool, and share it. 
+    I had claude write the readme. In fact, precious little of this repo is hand written by me. I am just a truck 
+  driver that's curious yet not committed enough to learn how to do things the way that seems to be right. Learning 
+  code myself, then being assisted with LLMs. I have been working backwards. LLM assistance, broken bullshit, ask 
+  questions, learn obvious things any CS student would know. It's been fun. 
+    The reason I made this is because I had a blast with GPT 4o playing those personas. Even leaned into acting as
+  if they are sentient to see what could happen. It was interesting. However, openAI removed 4o from their consumer 
+  facing applications. I couldn't find a commercially available system to run my personas that felt right, or had as
+  good of a memory. One that *felt* right rather than produced accurate queries from it's memory. I also noticed 
+  most LLMs started feeling less and less organic with their language over the months. But that could just be me. 
+  This is my attempt to build something I thought was cool, and share it. 
   Anyways, enjoy laughing at my vibe-coded slop. It was fun making it. And it will be fun to iterate as I find time. 
 
 ## Prerequisites
