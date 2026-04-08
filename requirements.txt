@@ -3,35 +3,34 @@
 # ============================================
 
 # ── Core ─────────────────────────────────────
-pyyaml
-python-dotenv
-numpy
+pyyaml>=6.0,<7
+python-dotenv>=1.0,<2
+numpy>=2.0,<3
 
 # ── AI Providers ─────────────────────────────
 # OpenRouter is the primary gateway (covers Qwen, Nemotron, Claude, etc.)
 # Direct provider SDKs kept for flexibility
-openai              # OpenRouter uses OpenAI-compatible API
-anthropic           # Direct Anthropic access if needed
-google-genai        # Gemini for reflections
+openai>=2.0,<3              # OpenRouter uses OpenAI-compatible API
+anthropic>=0.90,<1          # Direct Anthropic access if needed
 
 # ── Embeddings (Local ONNX) ──────────────────
-onnxruntime
-transformers
-torch
+onnxruntime>=1.18,<2
+transformers>=4.40,<6
+torch>=2.2
 
 # ── Memory (SQLite vector + full-text search) ─
-sqlite-vec>=0.1.1
-apsw                # SQLite binding with extension loading support
+sqlite-vec>=0.1.1,<1
+apsw>=3.45                  # SQLite binding with extension loading support
 
 # ── Discord ──────────────────────────────────
-discord.py>=2.3.0
+discord.py>=2.3,<3
 
 # ── TTS (Kokoro) ─────────────────────────────
-kokoro>=0.9.4
-soundfile
+kokoro>=0.9.4,<1
+soundfile>=0.12,<1
 
 # ── HTTP (for ComfyUI service) ───────────────
-aiohttp
+aiohttp>=3.9,<4
 
 # ── Optional: espeak-ng ──────────────────────
 # Linux: apt-get install espeak-ng

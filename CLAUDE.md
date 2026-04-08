@@ -97,10 +97,23 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 
 `/watch`, `/unwatch`, `/channels`, `/status`, `/set_default`, `/clear_default`, `/reset_buffer`, `/imagine`
 
-## Legacy files (still present, unused)
+## Additional files (not in key files table)
 
-- `src/orchestrator.py` — Old per-persona orchestrator, replaced by unified
-- `src/services/arbitrator_service.py` — Old routing service, replaced by unified model handling routing
+| File | What it does |
+|------|-------------|
+| `src/persona/loader.py` | Loads persona definitions from markdown files |
+| `src/persona/assembler.py` | Assembles persona prompt components |
+| `src/persona/memory_instructions.py` | Persona-specific memory instruction templates |
+| `src/context/manager.py` | Legacy per-persona context manager (unused, replaced by unified_manager) |
+| `src/providers/base.py` | Abstract base class for LLM providers |
+| `src/services/daily_reflection_service.py` | Generates periodic persona reflections using cheaper model |
+| `src/services/query_inference_service.py` | Infers embedding search queries from conversation context |
+| `src/services/comfyui_service.py` | ComfyUI integration for `/imagine` image generation |
+| `src/services/tts_service.py` | Kokoro TTS synthesis for voice reactions |
+| `src/utils/config.py` | YAML config loading and merging |
+| `src/utils/io.py` | I/O utilities |
+| `src/utils/paths.py` | Path resolution helpers |
+| `src/utils/token_counter.py` | Token counting for context window management |
 
 ## Dependencies (non-obvious)
 
