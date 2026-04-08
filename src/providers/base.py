@@ -137,6 +137,8 @@ class BaseProvider(ABC):
         conversation_history: Optional[List[Dict]] = None,
         formatted_memories: Optional[str] = None,
         tools: Optional[List[ToolDefinition]] = None,
+        json_mode: bool = False,
+        plugins: Optional[List[Dict]] = None,
     ) -> GenerationResult:
         """
         Generate a complete response.

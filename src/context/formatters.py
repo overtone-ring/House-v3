@@ -87,16 +87,29 @@ def format_memories(
     return "\n".join(lines)
 
 
+def _intensity_to_word(intensity: float) -> str:
+    """Convert a 0-1 intensity to a natural language descriptor."""
+    if intensity < 0.3:
+        return "faintly"
+    elif intensity < 0.5:
+        return "noticeably"
+    elif intensity < 0.7:
+        return "strongly"
+    elif intensity < 0.9:
+        return "deeply"
+    else:
+        return "overwhelmingly"
+
+
 def format_affective_primer(
     affective_state: Optional[Dict],
     intensity_threshold: float = DEFAULT_AFFECTIVE_INTENSITY_THRESHOLD,
 ) -> str:
     """
-    Format affective state into a contextual primer string.
+    Format affective state into a natural language primer string.
 
-    Returns:
-        Primer string like "[Current state: contemplative (intensity: 0.6)]"
-        or empty string if neutral/low intensity.
+    Uses descriptive language instead of numerical values to avoid
+    biasing the model toward clinical/analytical output.
     """
     if not affective_state:
         return ""
@@ -107,7 +120,64 @@ def format_affective_primer(
     if state == "neutral" or intensity < intensity_threshold:
         return ""
 
-    return f"[Current emotional state: {state} (intensity: {intensity:.1f})]"
+    word = _intensity_to_word(intensity)
+    return f"[Currently feeling {word} {state}]"
+
+
+def format_unified_context(
+    memories: List[Dict],
+    affective_states: Dict[str, Dict],
+    user_context: Optional[Dict] = None,
+    max_memory_chars: int = 6000,
+    intensity_threshold: float = DEFAULT_AFFECTIVE_INTENSITY_THRESHOLD,
+) -> str:
+    """
+    Format all context for the unified multi-persona prompt.
+
+    Combines memories (tagged by persona) and affective states into
+    a single context block injected between system prompt and user message.
+    """
+    sections = []
+
+    # Memories
+    if memories:
+        mem_lines = []
+        char_count = 0
+        for mem in memories:
+            content = mem.get("content", "").strip()
+            if not content:
+                continue
+            mem_type = mem.get("type", "exchange")
+            label = MEMORY_LABELS.get(mem_type, "[Memory]")
+            persona = mem.get("persona_name", "")
+            timestamp = mem.get("timestamp", "")[:10]
+            tag = f" ({persona}, {timestamp})" if persona else ""
+            line = f"{label}{tag} {content}"
+            if char_count + len(line) > max_memory_chars:
+                break
+            mem_lines.append(line)
+            char_count += len(line)
+        if mem_lines:
+            sections.append("## Relevant Memories\n" + "\n".join(mem_lines))
+
+    # Affective states (only non-neutral ones, natural language)
+    active_states = []
+    for persona, state in affective_states.items():
+        s = state.get("state", "neutral")
+        intensity = state.get("intensity", 0.0)
+        if s != "neutral" and intensity >= intensity_threshold:
+            word = _intensity_to_word(intensity)
+            active_states.append(f"- {persona} is feeling {word} {s}")
+    if active_states:
+        sections.append("## Current Emotional States\n" + "\n".join(active_states))
+
+    # User relationship
+    if user_context:
+        rel_line = format_relational_primer(user_context)
+        if rel_line:
+            sections.append("## User Context\n" + rel_line)
+
+    return "\n\n".join(sections)
 
 
 def format_relational_primer(
@@ -130,7 +200,7 @@ def format_relational_primer(
     display_name = user_context.get("display_name", "")
     familiarity = user_context.get("relationship_type", "stranger")
     if display_name:
-        parts.append(f"[Speaking with: {display_name} (familiarity: {familiarity})]")
+        parts.append(f"[Speaking with: {display_name} — {familiarity}]")
 
     # Relationship notes
     notes = user_context.get("notes", "")

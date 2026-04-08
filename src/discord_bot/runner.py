@@ -120,13 +120,11 @@ async def run_house(env_path: Optional[str] = None) -> None:
     embed = await EmbeddingService.get_instance(model_path)
     logger.info(f"Embedding model loaded ({embed.DIMENSIONS}d)")
 
-    # ── Initialize HouseOrchestrator ─────────────────────────────
-    from ..orchestrator import HouseOrchestrator
-    house = HouseOrchestrator(config)
-    # Preload the default persona so pipeline errors surface now, not on first message
-    default_persona = config.get("default_persona", "elvira")
-    await house.initialize(preload_personas=[default_persona])
-    logger.info("HouseOrchestrator initialized")
+    # ── Initialize UnifiedOrchestrator ──────────────────────────
+    from ..unified_orchestrator import UnifiedOrchestrator
+    house = UnifiedOrchestrator(config)
+    await house.initialize()
+    logger.info("UnifiedOrchestrator initialized")
 
     # ── Create persona clients ───────────────────────────────────
     from .persona_client import PersonaClient

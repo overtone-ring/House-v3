@@ -85,6 +85,8 @@ class OpenRouterProvider(BaseProvider):
         conversation_history: Optional[List[Dict]] = None,
         formatted_memories: Optional[str] = None,
         tools: Optional[List[ToolDefinition]] = None,
+        json_mode: bool = False,
+        plugins: Optional[List[Dict]] = None,
     ) -> GenerationResult:
         """Generate a complete response via OpenRouter."""
         max_tokens, temperature = self._resolve_params(max_tokens, temperature)
@@ -92,7 +94,9 @@ class OpenRouterProvider(BaseProvider):
             prompt, system_prompt, contextual_primer,
             conversation_history, formatted_memories,
         )
-        payload = self._build_payload(messages, max_tokens, temperature, tools)
+        payload = self._build_payload(
+            messages, max_tokens, temperature, tools, json_mode, plugins
+        )
 
         def make_request():
             return self.client.chat.completions.create(**payload)
@@ -101,6 +105,8 @@ class OpenRouterProvider(BaseProvider):
         try:
             response = self._call_with_retry(make_request, "generate")
             latency = (time.monotonic() - start) * 1000
+
+            logger.info(f"[OpenRouter] Model requested: {self.config.model} | Model used: {response.model} | Latency: {latency:.0f}ms")
 
             choice = response.choices[0]
             text = choice.message.content or ""
@@ -329,6 +335,8 @@ class OpenRouterProvider(BaseProvider):
         max_tokens: int,
         temperature: float,
         tools: Optional[List[ToolDefinition]] = None,
+        json_mode: bool = False,
+        plugins: Optional[List[Dict]] = None,
     ) -> Dict:
         """Build the API request payload."""
         payload = {
@@ -337,6 +345,12 @@ class OpenRouterProvider(BaseProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+
+        if plugins:
+            payload["plugins"] = plugins
 
         if tools:
             payload["tools"] = [

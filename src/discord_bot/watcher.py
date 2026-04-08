@@ -169,9 +169,10 @@ class Watcher(discord.Client):
             lines.append(f"\n**Watched channels:** {len(self._watched_channel_ids)}")
             lines.append(f"**Active buffers:** {len(self._buffers)}")
 
-            # Arbitrator
-            arb_enabled = self._config.get("arbitrator", {}).get("enabled", True)
-            lines.append(f"**Arbitrator:** {'enabled' if arb_enabled else 'disabled'}")
+            # Generation mode
+            unified = self._config.get("unified", {})
+            json_mode = unified.get("json_mode", True)
+            lines.append(f"**Mode:** unified generation (json_mode={'on' if json_mode else 'off'})")
 
             # TTS
             tts_provider = self._config.get("tts", {}).get("provider", "none")
@@ -244,26 +245,25 @@ class Watcher(discord.Client):
             interaction: discord.Interaction,
             channel: discord.TextChannel,
         ):
-            channel_name = channel.name
-            if channel_name in self._buffers:
-                self._buffers[channel_name].clear()
-                del self._buffers[channel_name]
+            if channel.id in self._buffers:
+                self._buffers[channel.id].clear()
+                del self._buffers[channel.id]
 
             # Delete the persisted buffer file too
             data_dir = self._config.get("memory", {}).get("data_dir", "./data")
             buf_path = Path(
                 ConversationBuffer.session_file_path(
-                    f"discord_{channel_name}", data_dir
+                    f"discord_{channel.id}", data_dir
                 )
             )
             if buf_path.exists():
                 buf_path.unlink()
 
             await interaction.response.send_message(
-                f"Conversation buffer for **#{channel_name}** has been cleared.",
+                f"Conversation buffer for **#{channel.name}** has been cleared.",
                 ephemeral=True,
             )
-            logger.info(f"[Watcher] Buffer cleared for #{channel_name}")
+            logger.info(f"[Watcher] Buffer cleared for #{channel.name} ({channel.id})")
 
         # ── Image Generation ─────────────────────────────────────
 
@@ -412,9 +412,8 @@ class Watcher(discord.Client):
         user_name = message.author.display_name
 
         # ── Resolve @mentions ────────────────────────────────────
-        # Replace <@BOT_ID> with persona names so the arbitrator
-        # can match them, and detect single-persona @mentions
-        cleaned_input, mention_forced = self._resolve_mentions(user_input)
+        # Replace <@BOT_ID> with persona names so the model can see them
+        cleaned_input, _ = self._resolve_mentions(user_input)
 
         logger.info(
             f"[Watcher] #{channel_name} | {user_name}: {cleaned_input[:80]}"
@@ -422,36 +421,30 @@ class Watcher(discord.Client):
         )
 
         # ── Signal: thinking ─────────────────────────────────────
-        # 🧠 on the user's message = "I'm processing this"
         try:
             await message.add_reaction("\U0001f9e0")  # 🧠
         except discord.HTTPException:
-            pass  # Missing permissions — not critical
+            pass
 
         # ── Conversation buffer ──────────────────────────────────
-        buffer = self._get_or_create_buffer(channel_name)
+        channel_id = message.channel.id
+        buffer = self._get_or_create_buffer(channel_id)
         buffer.add_user_message(
             content=cleaned_input,
             speaker_name=user_name,
         )
 
-        # ── Check for channel default persona ────────────────────
-        # Priority: @mention > channel default > arbitrator
-        forced_persona = mention_forced or self._channel_defaults.get(message.channel.id)
-
-        # ── Orchestrate ──────────────────────────────────────────
+        # ── Orchestrate (single unified call) ────────────────────
         try:
-            results = await self._house.process_message(
+            responses = await self._house.process_message(
                 user_input=cleaned_input,
-                session_id=f"discord_{channel_name}",
+                session_id=f"discord_{channel_id}",
                 user_id=str(message.author.id),
                 channel_name=channel_name,
-                persona=forced_persona,
                 conversation_buffer=buffer,
             )
         except Exception as e:
             logger.error(f"[Watcher] Orchestration failed: {e}", exc_info=True)
-            # Remove 🧠 on failure — don't leave stale indicators
             try:
                 await message.remove_reaction("\U0001f9e0", self.user)
             except discord.HTTPException:
@@ -459,11 +452,8 @@ class Watcher(discord.Client):
             return
 
         # ── Dispatch responses ───────────────────────────────────
-        for result in results:
-            persona_name = result["persona"]
-            response_text = result["response"]
-
-            if not response_text or not response_text.strip():
+        for persona_name, response_text in responses.items():
+            if response_text is None or not response_text.strip():
                 continue
 
             # Find the persona client
@@ -490,7 +480,6 @@ class Watcher(discord.Client):
                         persona_channel, response_text
                     )
             except discord.HTTPException:
-                # Typing failed but try to send anyway
                 sent_messages = await client.send_long_response(
                     persona_channel, response_text
                 )
@@ -504,17 +493,15 @@ class Watcher(discord.Client):
 
             logger.info(
                 f"[Watcher] #{channel_name} | {persona_name} responded "
-                f"({len(response_text)} chars, "
-                f"tier={result.get('routing', {}).get('tier', '?')})"
+                f"({len(response_text)} chars)"
             )
 
         # ── Signal: done ─────────────────────────────────────────
-        # Swap 🧠 → ✅ on the user's message
         try:
             await message.remove_reaction("\U0001f9e0", self.user)
             await message.add_reaction("\u2705")  # ✅
         except discord.HTTPException:
-            pass  # Missing permissions — not critical
+            pass
 
         # ── Persist buffer ───────────────────────────────────────
         if buffer.is_dirty:
@@ -522,7 +509,7 @@ class Watcher(discord.Client):
                 data_dir = self._config.get("memory", {}).get("data_dir", "./data")
                 buffer.save(
                     ConversationBuffer.session_file_path(
-                        f"discord_{channel_name}", data_dir
+                        f"discord_{channel_id}", data_dir
                     )
                 )
             except Exception as e:
@@ -530,19 +517,19 @@ class Watcher(discord.Client):
 
     # ── Buffer Management ────────────────────────────────────────
 
-    def _get_or_create_buffer(self, channel_name: str) -> ConversationBuffer:
-        """Get or create a conversation buffer for a channel."""
-        if channel_name not in self._buffers:
-            session_id = f"discord_{channel_name}"
+    def _get_or_create_buffer(self, channel_id: int) -> ConversationBuffer:
+        """Get or create a conversation buffer for a channel (keyed by ID for multi-server safety)."""
+        if channel_id not in self._buffers:
+            session_id = f"discord_{channel_id}"
             data_dir = self._config.get("memory", {}).get("data_dir", "./data")
 
-            self._buffers[channel_name] = ConversationBuffer.load_or_create(
+            self._buffers[channel_id] = ConversationBuffer.load_or_create(
                 session_id=session_id,
                 base_dir=data_dir,
                 max_turns=self._buffer_max_turns,
             )
 
-        return self._buffers[channel_name]
+        return self._buffers[channel_id]
 
     # ── Watch State Persistence ──────────────────────────────────
 

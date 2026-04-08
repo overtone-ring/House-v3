@@ -6,7 +6,7 @@
 # ── Provider ──────────────────────────────────────────────────────────
 provider:
   name: openrouter
-  model: qwen/qwen3-235b-a22b-2507
+  model: google/gemma-4-31b-it
   # api_key: set in .env or config/local.yaml
   max_tokens: 8192
   temperature: 0.9
@@ -57,23 +57,13 @@ context:
   max_results: 15
   max_relevant_chars: 8000
 
-# ── Arbitrator (who responds) ────────────────────────────────────────
-arbitrator:
-  enabled: true
-  # Qwen 235B — strong reasoning + psychology for routing decisions
-  # At $0.07/M input, a 1-2k token routing call costs fractions of a penny
-  provider:
-    name: openrouter
-    model: qwen/qwen3-235b-a22b-2507
-    max_tokens: 150
-    temperature: 0.3
-  # How many recent turns to include in the routing context
-  max_context_turns: 3
-  # Channel-specific defaults (skip LLM for these channels)
-  channel_defaults: {}
-    # elviras-room: elvira
-    # franks-room: frank
-    # the-den: null  # null = use LLM routing
+# ── Unified Generation ───────────────────────────────────────────────
+# Single LLM call generates all persona responses as JSON.
+# Replaces the old arbitrator + per-persona orchestrator pipeline.
+unified:
+  system_prompt_file: data/personas/unified_house.md
+  json_mode: true        # Request structured JSON output from the model
+  fallback_persona: elvira  # If JSON parsing fails, assign response to this persona
 
 # ── TTS (Text-to-Speech) ────────────────────────────────────────────
 tts:

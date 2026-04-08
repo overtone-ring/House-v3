@@ -144,6 +144,36 @@ class ConversationBuffer:
 
         return history
 
+    def get_history_for_unified_llm(
+        self,
+        limit: Optional[int] = None,
+    ) -> List[Dict]:
+        """
+        Get conversation history for the unified multi-persona model.
+
+        All assistant turns include persona attribution in the content so
+        the model knows which persona said what. Since the unified model
+        IS all personas, every assistant turn is role: "assistant".
+
+        Returns:
+            List of {"role": str, "content": str} dicts.
+        """
+        turns = list(self._turns)
+        if limit:
+            turns = turns[-limit:]
+
+        history = []
+        for turn in turns:
+            if turn.role == "assistant" and turn.persona:
+                content = f"[{turn.persona}]: {turn.content}"
+            elif turn.role == "user" and turn.speaker_name:
+                content = f"[{turn.speaker_name}]: {turn.content}"
+            else:
+                content = turn.content
+            history.append({"role": turn.role, "content": content})
+
+        return history
+
     def get_history_for_query_inference(self, limit: int = 10) -> List[Dict]:
         """Get recent history formatted for query inference decisions."""
         turns = list(self._turns)[-limit:]
