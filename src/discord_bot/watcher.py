@@ -99,7 +99,7 @@ class Watcher(discord.Client):
             name="watch",
             description="Start watching a channel — the personas will respond to messages here",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         @app_commands.describe(channel="The channel to start watching")
         async def watch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.add(channel.id)
@@ -114,7 +114,7 @@ class Watcher(discord.Client):
             name="unwatch",
             description="Stop watching a channel — personas will no longer respond here",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         @app_commands.describe(channel="The channel to stop watching")
         async def unwatch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.discard(channel.id)
@@ -130,7 +130,7 @@ class Watcher(discord.Client):
             name="channels",
             description="List all currently watched channels",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         async def channels(interaction: discord.Interaction):
             if not self._watched_channel_ids:
                 await interaction.response.send_message(
@@ -156,7 +156,7 @@ class Watcher(discord.Client):
             name="status",
             description="Show the bot fleet status — who's online, what's being watched",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         async def status(interaction: discord.Interaction):
             lines = ["**Bot Fleet Status**\n"]
 
@@ -189,7 +189,7 @@ class Watcher(discord.Client):
             name="set_default",
             description="Set a default persona for a channel — skips the arbitrator",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         @app_commands.describe(
             channel="The channel to set a default for",
             persona="The persona who always responds in this channel",
@@ -220,7 +220,7 @@ class Watcher(discord.Client):
             name="clear_default",
             description="Remove the default persona for a channel — use the arbitrator again",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         @app_commands.describe(channel="The channel to clear the default for")
         async def clear_default(
             interaction: discord.Interaction,
@@ -244,7 +244,7 @@ class Watcher(discord.Client):
             name="reset_buffer",
             description="Clear the conversation history for a channel — fresh start",
         )
-        @app_commands.default_member_permissions(discord.Permissions(administrator=True))
+        @app_commands.default_permissions(administrator=True)
         @app_commands.describe(channel="The channel to reset")
         async def reset_buffer(
             interaction: discord.Interaction,
