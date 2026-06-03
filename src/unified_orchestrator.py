@@ -24,7 +24,7 @@ from .providers.base import BaseProvider
 from .conversation.buffer import ConversationBuffer
 from .context.unified_manager import UnifiedContextManager
 from .context.formatters import format_unified_context
-from .services.raptor_memory_service import MemoryService
+from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
 from .response_parser import parse_house_response
@@ -61,6 +61,11 @@ class UnifiedOrchestrator:
         self._state_manager: Optional[StateManager] = None
         self._query_inference = None
         self._unified_prompt: Optional[str] = None
+
+        # Tracks fire-and-forget post-process tasks so shutdown() can drain
+        # them — otherwise a Ctrl+C right after a message can lose the
+        # exchange before it's written to memory.
+        self._pending_tasks: set[asyncio.Task] = set()
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -165,12 +170,19 @@ class UnifiedOrchestrator:
             conversation_history=conversation_history,
         )
 
-        # Step 5: Parse JSON response
-        responses = parse_house_response(
-            response_text,
-            valid_personas=self.personas,
-            default_persona=self._fallback_persona,
-        )
+        # Step 5: Parse response
+        if self._json_mode:
+            responses = parse_house_response(
+                response_text,
+                valid_personas=self.personas,
+                default_persona=self._fallback_persona,
+            )
+        else:
+            # Plain-text mode: entire response goes to the fallback persona.
+            # Intended for single-persona configurations where JSON shaping
+            # is dead weight on the model.
+            responses = {p: None for p in self.personas}
+            responses[self._fallback_persona] = response_text.strip() or None
 
         # Step 6: Post-process (async, don't block response delivery)
         task = asyncio.create_task(
@@ -182,6 +194,7 @@ class UnifiedOrchestrator:
                 conversation_buffer=conversation_buffer,
             )
         )
+        self._pending_tasks.add(task)
         task.add_done_callback(self._on_post_process_done)
 
         return responses
@@ -251,9 +264,9 @@ class UnifiedOrchestrator:
                     exc_info=True,
                 )
 
-    @staticmethod
-    def _on_post_process_done(task: asyncio.Task) -> None:
+    def _on_post_process_done(self, task: asyncio.Task) -> None:
         """Log exceptions from fire-and-forget post-processing tasks."""
+        self._pending_tasks.discard(task)
         if task.cancelled():
             return
         exc = task.exception()
@@ -263,8 +276,20 @@ class UnifiedOrchestrator:
     # ── Lifecycle ────────────────────────────────────────────────
 
     async def shutdown(self) -> None:
-        """Shutdown all components."""
-        logger.info("UnifiedOrchestrator shutting down")
+        """Drain pending memory writes so Ctrl+C doesn't lose exchanges."""
+        if self._pending_tasks:
+            pending = list(self._pending_tasks)
+            logger.info(f"Draining {len(pending)} pending memory writes...")
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*pending, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"{len(self._pending_tasks)} memory writes did not finish in 5s"
+                )
+        logger.info("UnifiedOrchestrator shut down")
 
 
 # ── Factory ──────────────────────────────────────────────────────────

@@ -62,7 +62,7 @@ context:
 # Replaces the old arbitrator + per-persona orchestrator pipeline.
 unified:
   system_prompt_file: data/personas/unified_house.md
-  json_mode: true        # Request structured JSON output from the model
+  json_mode: true        # Request structured JSON output from the model (multi-persona only)
   fallback_persona: elvira  # If JSON parsing fails, assign response to this persona
 
 # ── TTS (Text-to-Speech) ────────────────────────────────────────────
@@ -96,14 +96,6 @@ affective:
     resonance:          { rate: 0.67, target: 0.0 }
     temperature:        { rate: 0.67, target: 0.5 }
     intellectual_depth: { rate: 0.53, target: 0.0 }
-
-# ── ComfyUI (Image Generation) ──────────────────────────────────────
-comfyui:
-  enabled: true
-  base_url: http://127.0.0.1:8188
-  workflows_dir: .              # Directory containing workflow JSON files
-  poll_interval: 1.0            # Seconds between completion checks
-  timeout: 900                  # Max seconds to wait (15min for M3 chip)
 
 # ── Discord ─────────────────────────────────────────────────────────
 discord:

@@ -327,13 +327,22 @@ class ConversationBuffer:
         base_dir: str = "./data",
         max_turns: int = 50,
     ) -> "ConversationBuffer":
-        """Load existing session or create a new buffer."""
+        """Load existing session or create a new buffer.
+
+        Falling back to an empty buffer is always safer than crashing the
+        watcher: a corrupt session file (truncated mid-write, schema drift,
+        non-dict root, OS-level read error) loses recent history but keeps
+        the channel responsive instead of taking the bot down on startup.
+        """
         path = cls.session_file_path(session_id, base_dir)
         if os.path.exists(path):
             try:
                 return cls.load(path)
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning(f"Failed to load session {session_id}: {e}")
+            except Exception as e:
+                logger.warning(
+                    f"Failed to load session {session_id} ({type(e).__name__}: {e}); "
+                    f"starting fresh buffer"
+                )
 
         return cls(max_turns=max_turns, session_id=session_id)
 

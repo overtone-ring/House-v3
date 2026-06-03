@@ -105,11 +105,17 @@ MAX_RESPONSE_CHARS = 2000  # Per-persona hard limit (Discord max is 2000 anyway)
 
 
 def _detect_repetition(text: str, min_phrase_len: int = 20, max_repeats: int = 3) -> bool:
-    """Detect if text contains a repeating phrase loop."""
+    """Detect if text contains a repeating phrase loop.
+
+    Bound the start window so the slice is always exactly `min_phrase_len`
+    chars — without this, slices near the end of the string shrink and
+    eventually become empty, and `text.count("")` returns len(text)+1,
+    falsely flagging every response > 60 chars.
+    """
     if len(text) < min_phrase_len * max_repeats:
         return False
-    # Check if any 20+ char substring repeats more than max_repeats times
-    for start in range(0, min(200, len(text))):
+    last_start = len(text) - min_phrase_len
+    for start in range(0, min(200, last_start + 1)):
         phrase = text[start:start + min_phrase_len]
         if text.count(phrase) > max_repeats:
             return True

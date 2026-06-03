@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import struct
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -208,6 +209,10 @@ class MemoryStore:
         self.db_path = db_path
         self._conn: Optional[apsw.Connection] = None
         self._initialized = False
+        # All write paths share one APSW connection across asyncio.to_thread
+        # worker threads. Serialize them so manual BEGIN/COMMIT blocks from
+        # concurrent (cross-channel) writes can't collide on the connection.
+        self._write_lock = threading.Lock()
 
     # ── Initialization ────────────────────────────────────────────
 
@@ -253,33 +258,34 @@ class MemoryStore:
 
     def _append_exchange_sync(self, exchange: Exchange) -> str:
         d = exchange.to_dict()
-        self._conn.execute("BEGIN")
-        try:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO exchanges
-                   (id, session_id, user_msg, assistant_response, persona_name,
-                    timestamp, reflected, participants, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    d["id"], d["session_id"], d["user_msg"], d["assistant_response"],
-                    d["persona_name"], d["timestamp"], int(d.get("reflected", False)),
-                    json.dumps(d.get("participants", [])),
-                    json.dumps(d.get("metadata", {})),
-                ),
-            )
-
-            # Insert embedding into vec0 table
-            if exchange.embedding:
-                vec_data = _serialize_embedding(exchange.embedding)
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO exchanges_vec(id, embedding) VALUES (?, ?)",
-                    (d["id"], vec_data),
+                    """INSERT OR REPLACE INTO exchanges
+                       (id, session_id, user_msg, assistant_response, persona_name,
+                        timestamp, reflected, participants, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        d["id"], d["session_id"], d["user_msg"], d["assistant_response"],
+                        d["persona_name"], d["timestamp"], int(d.get("reflected", False)),
+                        json.dumps(d.get("participants", [])),
+                        json.dumps(d.get("metadata", {})),
+                    ),
                 )
 
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+                # Insert embedding into vec0 table
+                if exchange.embedding:
+                    vec_data = _serialize_embedding(exchange.embedding)
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO exchanges_vec(id, embedding) VALUES (?, ?)",
+                        (d["id"], vec_data),
+                    )
+
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
         return d["id"]
 
@@ -309,30 +315,32 @@ class MemoryStore:
             return False
 
         values.append(record_id)
-        rows_changed = self._conn.execute(
-            f"UPDATE exchanges SET {', '.join(sets)} WHERE id = ?",
-            tuple(values),
-        )
-        return self._conn.changes() > 0
+        with self._write_lock:
+            self._conn.execute(
+                f"UPDATE exchanges SET {', '.join(sets)} WHERE id = ?",
+                tuple(values),
+            )
+            return self._conn.changes() > 0
 
     async def delete_exchange(self, record_id: str) -> bool:
         """Delete an exchange and its vector/FTS entries."""
         return await asyncio.to_thread(self._delete_exchange_sync, record_id)
 
     def _delete_exchange_sync(self, record_id: str) -> bool:
-        self._conn.execute("BEGIN")
-        try:
-            self._conn.execute("DELETE FROM exchanges WHERE id = ?", (record_id,))
-            deleted = self._conn.changes() > 0
-            if deleted:
-                self._conn.execute(
-                    "DELETE FROM exchanges_vec WHERE id = ?", (record_id,)
-                )
-            self._conn.execute("COMMIT")
-            return deleted
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
+                self._conn.execute("DELETE FROM exchanges WHERE id = ?", (record_id,))
+                deleted = self._conn.changes() > 0
+                if deleted:
+                    self._conn.execute(
+                        "DELETE FROM exchanges_vec WHERE id = ?", (record_id,)
+                    )
+                self._conn.execute("COMMIT")
+                return deleted
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
     # ── Reflection CRUD ───────────────────────────────────────────
 
@@ -342,31 +350,32 @@ class MemoryStore:
 
     def _append_reflection_sync(self, reflection: DailyReflection) -> str:
         d = reflection.to_dict()
-        self._conn.execute("BEGIN")
-        try:
-            self._conn.execute(
-                """INSERT OR REPLACE INTO reflections
-                   (id, persona_name, date, summary, exchange_count,
-                    exchange_ids, created_at, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    d["id"], d["persona_name"], d["date"], d["summary"],
-                    d["exchange_count"], json.dumps(d.get("exchange_ids", [])),
-                    d["created_at"], json.dumps(d.get("metadata", {})),
-                ),
-            )
-
-            if reflection.embedding:
-                vec_data = _serialize_embedding(reflection.embedding)
+        with self._write_lock:
+            self._conn.execute("BEGIN")
+            try:
                 self._conn.execute(
-                    "INSERT OR REPLACE INTO reflections_vec(id, embedding) VALUES (?, ?)",
-                    (d["id"], vec_data),
+                    """INSERT OR REPLACE INTO reflections
+                       (id, persona_name, date, summary, exchange_count,
+                        exchange_ids, created_at, metadata)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        d["id"], d["persona_name"], d["date"], d["summary"],
+                        d["exchange_count"], json.dumps(d.get("exchange_ids", [])),
+                        d["created_at"], json.dumps(d.get("metadata", {})),
+                    ),
                 )
 
-            self._conn.execute("COMMIT")
-        except Exception:
-            self._conn.execute("ROLLBACK")
-            raise
+                if reflection.embedding:
+                    vec_data = _serialize_embedding(reflection.embedding)
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO reflections_vec(id, embedding) VALUES (?, ?)",
+                        (d["id"], vec_data),
+                    )
+
+                self._conn.execute("COMMIT")
+            except Exception:
+                self._conn.execute("ROLLBACK")
+                raise
 
         return d["id"]
 
@@ -662,19 +671,20 @@ class MemoryStore:
 
     def _save_relationship_sync(self, user_id: str, relationship) -> None:
         data = relationship.to_dict() if hasattr(relationship, "to_dict") else relationship
-        self._conn.execute(
-            """INSERT OR REPLACE INTO relationships
-               (user_id, id, display_name, total_exchanges, trust_level,
-                relationship_type, first_seen, last_seen, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                user_id, data.get("id", ""), data.get("display_name", ""),
-                data.get("total_exchanges", 0), data.get("trust_level", 0.0),
-                data.get("relationship_type", "stranger"),
-                data.get("first_seen", ""), data.get("last_seen", ""),
-                json.dumps(data.get("metadata", {})),
-            ),
-        )
+        with self._write_lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO relationships
+                   (user_id, id, display_name, total_exchanges, trust_level,
+                    relationship_type, first_seen, last_seen, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    user_id, data.get("id", ""), data.get("display_name", ""),
+                    data.get("total_exchanges", 0), data.get("trust_level", 0.0),
+                    data.get("relationship_type", "stranger"),
+                    data.get("first_seen", ""), data.get("last_seen", ""),
+                    json.dumps(data.get("metadata", {})),
+                ),
+            )
 
     async def get_all_relationships(self) -> List[dict]:
         """Load all user relationships."""
@@ -702,20 +712,21 @@ class MemoryStore:
 
     def _save_session_sync(self, session_id: str, state) -> None:
         data = state.to_dict() if hasattr(state, "to_dict") else state
-        self._conn.execute(
-            """INSERT OR REPLACE INTO sessions
-               (session_id, id, persona_name, exchange_count, topics_discussed,
-                emotional_arc, started_at, last_activity, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                session_id, data.get("id", ""), data.get("persona_name", ""),
-                data.get("exchange_count", 0),
-                json.dumps(data.get("topics_discussed", [])),
-                json.dumps(data.get("emotional_arc", [])),
-                data.get("started_at", ""), data.get("last_activity", ""),
-                json.dumps(data.get("metadata", {})),
-            ),
-        )
+        with self._write_lock:
+            self._conn.execute(
+                """INSERT OR REPLACE INTO sessions
+                   (session_id, id, persona_name, exchange_count, topics_discussed,
+                    emotional_arc, started_at, last_activity, metadata)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id, data.get("id", ""), data.get("persona_name", ""),
+                    data.get("exchange_count", 0),
+                    json.dumps(data.get("topics_discussed", [])),
+                    json.dumps(data.get("emotional_arc", [])),
+                    data.get("started_at", ""), data.get("last_activity", ""),
+                    json.dumps(data.get("metadata", {})),
+                ),
+            )
 
     async def list_sessions(self, persona_name: Optional[str] = None) -> List[str]:
         return await asyncio.to_thread(self._list_sessions_sync, persona_name)

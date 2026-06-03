@@ -34,7 +34,7 @@ User message → Watcher bot → UnifiedOrchestrator.process_message()
 | `src/response_parser.py` | JSON parsing with 4-layer fallback, repetition detection, 2000 char limit |
 | `src/memory/store.py` | SQLite + sqlite-vec + FTS5 via APSW. Hybrid search (vector + keyword via RRF) |
 | `src/memory/models.py` | Dataclasses: Exchange, DailyReflection, UserRelationship, SessionState |
-| `src/services/raptor_memory_service.py` | Memory API — `add_exchange()`, `search_memory()` (hybrid search) |
+| `src/services/memory_service.py` | Memory API — `add_exchange()`, `search_memory()` (hybrid search) |
 | `src/services/embedding_service.py` | ONNX embeddings — nomic-embed-text-v1.5, 768 dimensions, singleton |
 | `src/services/state_manager.py` | Per-persona affective state with time-based decay. File-based JSON |
 | `src/context/unified_manager.py` | Parallel context retrieval for all personas at once |
@@ -95,7 +95,7 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 
 ## Slash commands
 
-`/watch`, `/unwatch`, `/channels`, `/status`, `/set_default`, `/clear_default`, `/reset_buffer`, `/imagine`
+`/watch`, `/unwatch`, `/channels`, `/status`, `/set_default`, `/clear_default`, `/reset_buffer`
 
 ## Additional files (not in key files table)
 
@@ -108,7 +108,6 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 | `src/providers/base.py` | Abstract base class for LLM providers |
 | `src/services/daily_reflection_service.py` | Generates periodic persona reflections using cheaper model |
 | `src/services/query_inference_service.py` | Infers embedding search queries from conversation context |
-| `src/services/comfyui_service.py` | ComfyUI integration for `/imagine` image generation |
 | `src/services/tts_service.py` | Kokoro TTS synthesis for voice reactions |
 | `src/utils/config.py` | YAML config loading and merging |
 | `src/utils/io.py` | I/O utilities |

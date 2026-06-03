@@ -107,6 +107,9 @@ def create_provider_from_config(config: dict) -> BaseProvider:
 
     Any extra keys are passed through as provider-specific config.
     """
+    # Copy first — this function pops keys, and callers may pass a live config.
+    config = dict(config)
+
     # ── Env var fallback per provider ────────────────────────
     ENV_KEY_MAP = {
         "openrouter": "OPENROUTER_API_KEY",

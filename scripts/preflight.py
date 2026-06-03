@@ -46,7 +46,6 @@ def main():
         "transformers": "transformers",
         "torch": "torch",
         "discord": "discord.py",
-        "aiohttp": "aiohttp",
     }
     for import_name, pip_name in packages.items():
         try:

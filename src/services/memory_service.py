@@ -214,7 +214,3 @@ class MemoryService:
         await self._ensure_store()
         unreflected = await self._store.get_unreflected_exchanges(self.persona_name)
         return len(unreflected)
-
-
-# Keep backward-compatible alias during migration
-RaptorMemoryService = MemoryService

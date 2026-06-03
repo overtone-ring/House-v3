@@ -63,7 +63,7 @@ House-v3/
 │   ├── services/             # Business logic services
 │   │   ├── __init__.py
 │   │   ├── embedding_service.py       # ONNX text embedding (nomic-embed)
-│   │   ├── raptor_memory_service.py   # MemoryService — flat RAG API
+│   │   ├── memory_service.py          # MemoryService — flat RAG API
 │   │   ├── daily_reflection_service.py # Per-persona daily summaries
 │   │   ├── state_manager.py           # Affective state + time decay
 │   │   └── query_inference_service.py # "Should I search memory?" decisions
@@ -185,7 +185,7 @@ src/memory/vector_index.py  ← numpy only
 src/memory/store.py  ← depends on models + vector_index
     ↓
 src/services/embedding_service.py  ← ONNX runtime
-src/services/raptor_memory_service.py  ← depends on store + embedding
+src/services/memory_service.py  ← depends on store + embedding
 src/services/daily_reflection_service.py  ← depends on store + embedding + provider
 src/services/state_manager.py  ← file I/O only
 src/services/query_inference_service.py  ← depends on provider

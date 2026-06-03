@@ -94,7 +94,6 @@ Key settings:
 - `provider.model` -- which LLM to use (via OpenRouter)
 - `discord.channels` -- channels to listen in (empty = all)
 - `tts.provider` -- set to `kokoro` for voice, or remove to disable
-- `comfyui.enabled` -- image generation (requires local ComfyUI server)
 
 ## Managing data
 

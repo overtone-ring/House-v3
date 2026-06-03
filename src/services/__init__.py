@@ -20,4 +20,4 @@ Future services (add when needed):
 
 # Services are imported individually where needed to avoid
 # heavy dependency loading at package import time.
-# Example: from src.services.raptor_memory_service import MemoryService
+# Example: from src.services.memory_service import MemoryService

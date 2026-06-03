@@ -136,24 +136,12 @@ async def run_house(env_path: Optional[str] = None) -> None:
         )
         persona_clients[persona_name] = client
 
-    # ── Initialize ComfyUI (optional) ───────────────────────────
-    comfyui_service = None
-    comfy_config = config.get("comfyui", {})
-    if comfy_config.get("enabled", False):
-        try:
-            from ..services.comfyui_service import ComfyUIService
-            comfyui_service = ComfyUIService(config)
-            logger.info(f"ComfyUI service initialized: {comfyui_service.available_styles}")
-        except Exception as e:
-            logger.warning(f"ComfyUI initialization failed — disabled: {e}")
-
     # ── Create watcher ───────────────────────────────────────────
     from .watcher import Watcher
     watcher = Watcher(
         house_orchestrator=house,
         persona_clients=persona_clients,
         config=config,
-        comfyui_service=comfyui_service,
     )
 
     # ── Start all bots concurrently ──────────────────────────────
@@ -201,6 +189,9 @@ async def run_house(env_path: Optional[str] = None) -> None:
 
         if shutdown_tasks:
             await asyncio.gather(*shutdown_tasks, return_exceptions=True)
+
+        # Drain pending memory writes before the loop tears down
+        await house.shutdown()
 
         # Shutdown TTS
         if tts_service:

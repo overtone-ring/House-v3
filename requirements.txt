@@ -29,9 +29,6 @@ discord.py>=2.3,<3
 kokoro>=0.9.4,<1
 soundfile>=0.12,<1
 
-# ── HTTP (for ComfyUI service) ───────────────
-aiohttp>=3.9,<4
-
 # ── Optional: espeak-ng ──────────────────────
 # Linux: apt-get install espeak-ng
 # macOS: brew install espeak-ng (or Kokoro may bundle it)
