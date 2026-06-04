@@ -128,9 +128,15 @@ class UnifiedOrchestrator:
         user_id: Optional[str] = None,
         channel_name: Optional[str] = None,
         conversation_buffer: Optional[ConversationBuffer] = None,
+        forced_personas: Optional[set] = None,
     ) -> Dict[str, Optional[str]]:
         """
         Process a user message through the unified pipeline.
+
+        Args:
+            forced_personas: If set, only these personas may respond — used when
+                specific personas are @mentioned. None means the whole house is
+                summoned (@Girls) and the model decides who speaks.
 
         Returns:
             Dict mapping persona names to response text.
@@ -163,6 +169,21 @@ class UnifiedOrchestrator:
             user_context=context.get("user_context"),
         )
 
+        # Routing directive: when specific personas were @mentioned, tell the
+        # model only they were addressed so it doesn't waste tokens (or break
+        # character) on the others. The output is also filtered in Step 5 as a
+        # hard guarantee.
+        if forced_personas:
+            names = ", ".join(sorted(p.capitalize() for p in forced_personas))
+            was = "was" if len(forced_personas) == 1 else "were"
+            directive = (
+                f"[Routing: only {names} {was} directly addressed this turn. "
+                f"Only they should respond; everyone else stays silent.]"
+            )
+            contextual_primer = (
+                f"{contextual_primer}\n\n{directive}" if contextual_primer else directive
+            )
+
         # Step 4: Single LLM call
         response_text = await self._generate(
             user_input=user_input,
@@ -183,6 +204,14 @@ class UnifiedOrchestrator:
             # is dead weight on the model.
             responses = {p: None for p in self.personas}
             responses[self._fallback_persona] = response_text.strip() or None
+
+        # Hard guarantee: when specific personas were addressed, silence anyone
+        # else the model may have let speak anyway.
+        if forced_personas:
+            responses = {
+                p: (r if p in forced_personas else None)
+                for p, r in responses.items()
+            }
 
         # Step 6: Post-process (async, don't block response delivery)
         task = asyncio.create_task(

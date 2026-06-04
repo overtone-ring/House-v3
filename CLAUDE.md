@@ -81,7 +81,7 @@ discord:               # channels (initial watch list)
 - **System prompt is loaded once at startup** and cached — restart the bot to pick up prompt changes
 - **Post-processing is fire-and-forget** — responses dispatch immediately, memory recording happens async
 - **Conversation buffer** tags user turns with `[speaker_name]:` and assistant turns with `[persona_name]:` for multi-user support
-- **Provider is swappable** — change `provider.model` in config. Tested: Qwen3-235B (stable), DeepSeek v3.2 (degenerated), Gemma 4 31B (testing)
+- **Provider is swappable** — change `provider.model` in config. Current primary: Gemma 4 31B (validated — distinct persona voices, ~$0.0007/msg). Also tested: Qwen3-235B (stable, now reflection-only), DeepSeek v3.2 (degenerated)
 
 ## Personas
 

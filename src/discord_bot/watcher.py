@@ -82,6 +82,11 @@ class Watcher(discord.Client):
         discord_config = self._config.get("discord", {})
         self._config_channel_names: List[str] = discord_config.get("channels", [])
 
+        # Name of the shared role that summons the whole house (case-insensitive).
+        # Pinging this role runs the full house; pinging an individual persona
+        # bot summons only that persona; a message with neither is ignored.
+        self._girls_role_name: str = discord_config.get("girls_role", "Girls").lower()
+
         # Persistence file for watched channels
         data_dir = self._config.get("memory", {}).get("data_dir", "./data")
         self._watch_state_path = Path(data_dir) / "discord_watch_state.json"
@@ -335,19 +340,36 @@ class Watcher(discord.Client):
         if message.channel.id not in self._watched_channel_ids:
             return
 
+        # ── Trigger gating ───────────────────────────────────────
+        # The house only speaks when explicitly summoned: either the shared
+        # @Girls role (whole house) or a specific persona bot ping (that
+        # persona only). Everything else is ignored — no LLM call, no cost.
+        cleaned_input, mentioned_personas = self._resolve_mentions(message.content)
+        girls_triggered = self._girls_role_mentioned(message)
+
+        if not girls_triggered and not mentioned_personas:
+            return
+
+        # @Girls = full house (model picks who speaks). Specific pings = only
+        # those personas. A @Girls ping wins over individual pings.
+        forced_personas = None if girls_triggered else set(mentioned_personas)
+
+        if girls_triggered:
+            cleaned_input = self._strip_role_mention(cleaned_input, message)
+
         # ── Get channel lock ─────────────────────────────────────
         async with self._channel_locks.setdefault(message.channel.id, asyncio.Lock()):
-            await self._process_message(message)
+            await self._process_message(message, cleaned_input, forced_personas)
 
-    async def _process_message(self, message: discord.Message):
+    async def _process_message(
+        self,
+        message: discord.Message,
+        cleaned_input: str,
+        forced_personas: Optional[Set[str]],
+    ):
         """Process a single user message through the full pipeline."""
         channel_name = message.channel.name
-        user_input = message.content
         user_name = message.author.display_name
-
-        # ── Resolve @mentions ────────────────────────────────────
-        # Replace <@BOT_ID> with persona names so the model can see them
-        cleaned_input, _ = self._resolve_mentions(user_input)
 
         logger.info(
             f"[Watcher] #{channel_name} | {user_name}: {cleaned_input[:80]}"
@@ -376,6 +398,7 @@ class Watcher(discord.Client):
                 user_id=str(message.author.id),
                 channel_name=channel_name,
                 conversation_buffer=buffer,
+                forced_personas=forced_personas,
             )
         except Exception as e:
             logger.error(f"[Watcher] Orchestration failed: {e}", exc_info=True)
@@ -504,18 +527,17 @@ class Watcher(discord.Client):
             if client.user:
                 self._persona_bot_ids.add(client.user.id)
 
-    def _resolve_mentions(self, text: str) -> tuple[str, Optional[str]]:
+    def _resolve_mentions(self, text: str) -> tuple[str, List[str]]:
         """
         Parse Discord @mentions (<@BOT_ID>) and resolve them to persona names.
 
         Returns:
-            (cleaned_text, forced_persona)
+            (cleaned_text, mentioned_personas)
             - cleaned_text: Message with <@ID> replaced by the persona's name
-              so the arbitrator's regex rules can match "elvira", "frank", etc.
-            - forced_persona: If exactly ONE persona was @mentioned, return their
-              name so the watcher can bypass the arbitrator. If multiple were
-              mentioned, return None (let the arbitrator handle it with the
-              cleaned text).
+              so the model can see who was addressed ("elvira", "frank", etc.).
+            - mentioned_personas: De-duplicated list (in mention order) of every
+              persona whose bot was pinged. Empty if none were. The caller uses
+              this to force-route the response to exactly those personas.
         """
         # Build reverse map: bot user ID → persona name
         id_to_persona: Dict[int, str] = {}
@@ -524,9 +546,9 @@ class Watcher(discord.Client):
                 id_to_persona[client.user.id] = name
 
         if not id_to_persona:
-            return text, None
+            return text, []
 
-        mentioned_personas = []
+        mentioned_personas: List[str] = []
 
         def replace_mention(match):
             uid = int(match.group(1))
@@ -539,14 +561,25 @@ class Watcher(discord.Client):
         # Discord mention formats: <@ID> or <@!ID> (nickname mention)
         cleaned = re.sub(r"<@!?(\d+)>", replace_mention, text)
 
-        # If exactly one persona was mentioned, force-route to them
-        forced = None
-        if len(mentioned_personas) == 1:
-            forced = mentioned_personas[0]
-        # If multiple were mentioned, the cleaned text now contains their names
-        # so the arbitrator's Tier 1 regex will pick them up
+        # De-duplicate while preserving mention order
+        seen: Set[str] = set()
+        ordered = [p for p in mentioned_personas if not (p in seen or seen.add(p))]
 
-        return cleaned, forced
+        return cleaned, ordered
+
+    def _girls_role_mentioned(self, message: discord.Message) -> bool:
+        """True if the message pings the shared house role (@Girls)."""
+        return any(
+            role.name.lower() == self._girls_role_name
+            for role in message.role_mentions
+        )
+
+    def _strip_role_mention(self, text: str, message: discord.Message) -> str:
+        """Replace the @Girls role mention (<@&ID>) with a readable token."""
+        for role in message.role_mentions:
+            if role.name.lower() == self._girls_role_name:
+                text = text.replace(f"<@&{role.id}>", "the House")
+        return text
 
     # ── Utilities ────────────────────────────────────────────────
 

@@ -105,6 +105,10 @@ discord:
   #   - general
   #   - the-den
   #   - elviras-room
+  # Name of the shared role assigned to all persona bots. Pinging this role
+  # (@Girls) summons the whole house; pinging an individual persona bot
+  # summons only that persona. Messages with neither ping are ignored.
+  girls_role: Girls
 
 # ── Logging ───────────────────────────────────────────────────────────
 logging:
