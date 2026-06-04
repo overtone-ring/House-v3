@@ -67,6 +67,11 @@ class Watcher(discord.Client):
         # Set of all persona bot user IDs (populated on_ready)
         self._persona_bot_ids: Set[int] = set()
 
+        # Cached map of persona bot user ID → persona name (populated on_ready).
+        # Used to resolve @mentions without reading live client.user, which can
+        # be None mid-reconnect and silently drop a ping.
+        self._persona_id_to_name: Dict[int, str] = {}
+
         # Processing lock per channel to prevent concurrent arbitration
         self._channel_locks: Dict[int, asyncio.Lock] = {}
 
@@ -280,10 +285,11 @@ class Watcher(discord.Client):
     async def on_ready(self):
         logger.info(f"[Watcher] Connected as {self.user} (ID: {self.user.id})")
 
-        # Collect persona bot user IDs for filtering
+        # Collect persona bot user IDs for filtering and mention resolution
         for name, client in self._persona_clients.items():
             if client.user:
                 self._persona_bot_ids.add(client.user.id)
+                self._persona_id_to_name[client.user.id] = name
                 logger.info(f"[Watcher] Tracking persona bot: {name} → {client.user.id}")
 
         # Load persisted watch state and prune inaccessible channels
@@ -344,11 +350,22 @@ class Watcher(discord.Client):
         # The house only speaks when explicitly summoned: either the shared
         # @Girls role (whole house) or a specific persona bot ping (that
         # persona only). Everything else is ignored — no LLM call, no cost.
-        cleaned_input, mentioned_personas = self._resolve_mentions(message.content)
+        cleaned_input, inline_personas = self._resolve_mentions(message.content)
+        mentioned_personas = self._all_mentioned_personas(message, inline_personas)
         girls_triggered = self._girls_role_mentioned(message)
 
         if not girls_triggered and not mentioned_personas:
+            logger.info(
+                f"[Watcher] #{message.channel.name} | ignored (no ping) | "
+                f"{message.author.display_name}: {message.content[:60]}"
+            )
             return
+
+        trigger = "girls" if girls_triggered else f"personas={mentioned_personas}"
+        logger.info(
+            f"[Watcher] #{message.channel.name} | triggered ({trigger}) | "
+            f"{message.author.display_name}: {message.content[:60]}"
+        )
 
         # @Girls = full house (model picks who speaks). Specific pings = only
         # those personas. A @Girls ping wins over individual pings.
@@ -526,6 +543,23 @@ class Watcher(discord.Client):
         for name, client in self._persona_clients.items():
             if client.user:
                 self._persona_bot_ids.add(client.user.id)
+                self._persona_id_to_name[client.user.id] = name
+
+    def _persona_id_map(self) -> Dict[int, str]:
+        """ID → persona name map for mention resolution.
+
+        Prefers the cached map (populated on_ready) so a ping still resolves
+        even if a persona client is momentarily mid-reconnect. Falls back to
+        live client.user if the cache is empty (e.g. a message arrives before
+        on_ready has run).
+        """
+        if self._persona_id_to_name:
+            return self._persona_id_to_name
+        return {
+            client.user.id: name
+            for name, client in self._persona_clients.items()
+            if client.user
+        }
 
     def _resolve_mentions(self, text: str) -> tuple[str, List[str]]:
         """
@@ -539,11 +573,8 @@ class Watcher(discord.Client):
               persona whose bot was pinged. Empty if none were. The caller uses
               this to force-route the response to exactly those personas.
         """
-        # Build reverse map: bot user ID → persona name
-        id_to_persona: Dict[int, str] = {}
-        for name, client in self._persona_clients.items():
-            if client.user:
-                id_to_persona[client.user.id] = name
+        # Reverse map: bot user ID → persona name (cached, reconnect-safe)
+        id_to_persona = self._persona_id_map()
 
         if not id_to_persona:
             return text, []
@@ -566,6 +597,42 @@ class Watcher(discord.Client):
         ordered = [p for p in mentioned_personas if not (p in seen or seen.add(p))]
 
         return cleaned, ordered
+
+    def _all_mentioned_personas(
+        self, message: discord.Message, inline_personas: List[str]
+    ) -> List[str]:
+        """All personas addressed by a message — inline pings, reply-pings, or
+        a reply to a persona's own message.
+
+        `inline_personas` are the <@ID> tokens already pulled from the text.
+        On top of those:
+        - `message.mentions` is discord.py's parsed mention list, which also
+          includes the author of a replied-to message when the reply has its
+          ping toggle on — the case a content-only regex scan misses.
+        - A reply to one of the bot's own messages addresses that persona even
+          if the ping toggle was turned off (uses the cached/resolved reference,
+          no API fetch).
+
+        Returns a de-duplicated list in discovery order.
+        """
+        id_map = self._persona_id_map()
+        found = list(inline_personas)
+
+        for user in message.mentions:
+            persona = id_map.get(user.id)
+            if persona:
+                found.append(persona)
+
+        ref = message.reference
+        resolved = getattr(ref, "resolved", None) if ref else None
+        ref_author = getattr(resolved, "author", None)
+        if ref_author is not None:
+            persona = id_map.get(ref_author.id)
+            if persona:
+                found.append(persona)
+
+        seen: Set[str] = set()
+        return [p for p in found if not (p in seen or seen.add(p))]
 
     def _girls_role_mentioned(self, message: discord.Message) -> bool:
         """True if the message pings the shared house role (@Girls)."""
