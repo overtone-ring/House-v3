@@ -21,6 +21,7 @@ Usage:
     results = await service.run_for_all_personas()
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -148,7 +149,11 @@ class DailyReflectionService:
 
         try:
             provider = self._get_reflection_provider()
-            result = provider.generate(prompt, temperature=0.3, max_tokens=1000)
+            # Run the blocking network call off the event loop so a startup
+            # backfill of many reflections doesn't stall Discord heartbeats.
+            result = await asyncio.to_thread(
+                provider.generate, prompt, temperature=0.3, max_tokens=1000
+            )
             summary = result.text.strip()
         except Exception as e:
             logger.error(f"Failed to generate reflection for {persona_name}: {e}")

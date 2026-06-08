@@ -351,6 +351,16 @@ class ConversationBuffer:
         """Get the file path for a session's conversation buffer."""
         return os.path.join(base_dir, "sessions", f"{session_id}_conversation.json")
 
+    @staticmethod
+    def archive_file_path(session_id: str, base_dir: str = "./data") -> str:
+        """Get the append-only archive path for a session's evicted turns.
+
+        When the active buffer is capped, older turns are appended here (one
+        JSON object per line) instead of being discarded, so the full history
+        is preserved without bloating the live buffer file.
+        """
+        return os.path.join(base_dir, "sessions", f"{session_id}_archive.jsonl")
+
     # ── Utilities ─────────────────────────────────────────────────
 
     def clear(self) -> None:

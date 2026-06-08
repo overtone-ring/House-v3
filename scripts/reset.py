@@ -56,40 +56,67 @@ def confirm(action: str) -> bool:
 
 
 def nuke(config: dict, skip_confirm: bool = False) -> None:
-    """Delete everything — full factory reset."""
+    """Delete all runtime data — but preserve the embedding model and persona prompts.
+
+    A "factory reset" wipes memory, state, buffers, and logs. It must NOT touch
+    data/models/ (the ONNX embedding model, not in git) or data/personas/ (the
+    system prompts). Deleting those bricks the install until they're re-downloaded.
+    """
     paths = get_paths(config)
     data_dir = paths["data_dir"]
     log_dir = paths["log_dir"]
 
-    print("NUKE — Full data reset")
+    print("NUKE — Full data reset (preserves model + persona prompts)")
     print(f"   Data dir:  {data_dir.resolve()}")
     print(f"   Log dir:   {log_dir.resolve()}")
 
-    targets = []
+    # Explicit deletion targets inside data_dir. Everything NOT listed here
+    # (notably models/ and personas/) is preserved.
+    data_targets = [
+        ("Memory database", data_dir / "memory.db"),
+        ("Memory DB (WAL)", data_dir / "memory.db-wal"),
+        ("Memory DB (SHM)", data_dir / "memory.db-shm"),
+        ("Conversation buffers", data_dir / "sessions"),
+        ("Affective/engagement state", data_dir / "state"),
+        ("Watch state", data_dir / "discord_watch_state.json"),
+    ]
+    # Per-persona reflection/memory subdirs (e.g. data/elvira/, data/frank/)
+    personas = config.get("personas", [])
+    for persona in personas:
+        data_targets.append((f"Persona data: {persona}", data_dir / persona))
 
-    if data_dir.exists():
-        targets.append(("Data directory", data_dir))
+    targets = [(label, p) for label, p in data_targets if p.exists()]
     if log_dir.exists():
         targets.append(("Log directory", log_dir))
 
     if not targets:
-        print("\n   Nothing to delete — directories don't exist yet.")
+        print("\n   Nothing to delete — no runtime data exists yet.")
         return
 
     print("\n   Will delete:")
     for label, path in targets:
-        file_count = sum(1 for _ in path.rglob("*") if _.is_file())
-        print(f"     {label}: {path} ({file_count} files)")
+        if path.is_dir():
+            file_count = sum(1 for _ in path.rglob("*") if _.is_file())
+            print(f"     {label}: {path} ({file_count} files)")
+        else:
+            print(f"     {label}: {path}")
+    print(f"\n   Preserved: {data_dir / 'models'}, {data_dir / 'personas'}")
 
-    if not skip_confirm and not confirm("permanently delete ALL data, memory, state, and logs"):
+    if not skip_confirm and not confirm(
+        "permanently delete all memory, state, buffers, and logs "
+        "(model + persona prompts are kept)"
+    ):
         print("   Cancelled.")
         return
 
     for label, path in targets:
-        shutil.rmtree(path)
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
         print(f"   Deleted {label}: {path}")
 
-    print("\nFull reset complete. House-v3 is a blank slate.")
+    print("\nFull reset complete. Memory wiped; model and persona prompts preserved.")
 
 
 def reset_today(config: dict, skip_confirm: bool = False) -> None:

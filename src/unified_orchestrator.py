@@ -165,7 +165,6 @@ class UnifiedOrchestrator:
         # Step 3: Build contextual primer from unified context
         contextual_primer = format_unified_context(
             memories=context.get("memories", []),
-            affective_states=context.get("affective_states", {}),
             user_context=context.get("user_context"),
         )
 

@@ -4,8 +4,9 @@
 # (which is .gitignored) for your environment.
 
 # ── Provider ──────────────────────────────────────────────────────────
+# OpenRouter is the only provider — it fronts Anthropic/Google/OpenAI/etc.
+# through one OpenAI-compatible endpoint, so there's no provider to select.
 provider:
-  name: openrouter
   model: google/gemma-4-31b-it
   # api_key: set in .env or config/local.yaml
   max_tokens: 8192
@@ -14,7 +15,6 @@ provider:
 # Reflection model (used for daily reflections, query inference, etc.)
 # Can be a cheaper/faster model since these are internal operations.
 reflection_provider:
-  name: openrouter
   model: qwen/qwen3-235b-a22b-2507
   max_tokens: 8192
   temperature: 0.5
@@ -84,22 +84,11 @@ query_inference:
   enabled: true
   temperature: 0.3
 
-# ── Affective State ──────────────────────────────────────────────────
-affective:
-  intensity_threshold: 0.3
-  base_decay_rate: 0.15  # Base decay per hour; each dimension scales this
-  # Per-dimension config: rate = multiplier on base, target = value to decay toward
-  dimensions:
-    novelty:            { rate: 1.0,  target: 0.5 }
-    tension:            { rate: 1.33, target: 0.0 }
-    fatigue:            { rate: 1.67, target: 0.0 }
-    resonance:          { rate: 0.67, target: 0.0 }
-    temperature:        { rate: 0.67, target: 0.5 }
-    intellectual_depth: { rate: 0.53, target: 0.0 }
-
 # ── Discord ─────────────────────────────────────────────────────────
 discord:
-  # Channels to listen in (empty = all channels)
+  # Channels to auto-watch on first startup, by name. Empty = watch nothing
+  # until you run /watch in Discord. (Watch state then persists to
+  # data/discord_watch_state.json and takes over from this list.)
   channels: []
   # channels:
   #   - general

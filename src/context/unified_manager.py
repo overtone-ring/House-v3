@@ -53,16 +53,14 @@ class UnifiedContextManager:
 
         Returns:
             {
-                "memories": [...],           # Combined memories from all personas
-                "affective_states": {...},   # Per-persona affective state
-                "user_context": {...},       # Relationship data
+                "memories": [...],       # Combined memories from all personas
+                "user_context": {...},   # Relationship data (or None)
                 "search_query": str,
                 "search_skipped": bool,
             }
         """
         result = {
             "memories": [],
-            "affective_states": {},
             "user_context": None,
             "search_query": query,
             "search_skipped": False,
@@ -91,14 +89,6 @@ class UnifiedContextManager:
                 result["memories"] = memories
             except Exception as e:
                 logger.warning(f"Memory search failed: {e}")
-
-        # Affective states for all personas
-        for persona_name in self.memory_services:
-            try:
-                state = self.state_manager.load_affective_state(persona_name)
-                result["affective_states"][persona_name] = state
-            except Exception as e:
-                logger.debug(f"Affective state load failed for {persona_name}: {e}")
 
         # User relationship
         if user_id:

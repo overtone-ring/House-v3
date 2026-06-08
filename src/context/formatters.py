@@ -126,16 +126,14 @@ def format_affective_primer(
 
 def format_unified_context(
     memories: List[Dict],
-    affective_states: Dict[str, Dict],
     user_context: Optional[Dict] = None,
     max_memory_chars: int = 6000,
-    intensity_threshold: float = DEFAULT_AFFECTIVE_INTENSITY_THRESHOLD,
 ) -> str:
     """
     Format all context for the unified multi-persona prompt.
 
-    Combines memories (tagged by persona) and affective states into
-    a single context block injected between system prompt and user message.
+    Combines retrieved memories (tagged by persona) and user relationship
+    context into a single block injected between system prompt and user message.
     """
     sections = []
 
@@ -159,17 +157,6 @@ def format_unified_context(
             char_count += len(line)
         if mem_lines:
             sections.append("## Relevant Memories\n" + "\n".join(mem_lines))
-
-    # Affective states (only non-neutral ones, natural language)
-    active_states = []
-    for persona, state in affective_states.items():
-        s = state.get("state", "neutral")
-        intensity = state.get("intensity", 0.0)
-        if s != "neutral" and intensity >= intensity_threshold:
-            word = _intensity_to_word(intensity)
-            active_states.append(f"- {persona} is feeling {word} {s}")
-    if active_states:
-        sections.append("## Current Emotional States\n" + "\n".join(active_states))
 
     # User relationship
     if user_context:

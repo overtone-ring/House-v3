@@ -2,208 +2,104 @@
 
 ## Overview
 
-House is a multi-persona conversational AI framework with flat RAG memory, daily reflections, and pluggable LLM providers. v3 is a simplified reorganization — RAPTOR hierarchy removed in favor of direct vector search over turn-pair exchanges with per-persona daily summaries.
+House is a multi-persona Discord bot. Five personas (Elvira, Frank, Zagna, Vireline, Ellie) share **one** LLM call: a single unified system prompt asks the model to inhabit all five voices at once and return structured JSON saying who speaks and what they say. There is no arbitrator and no per-persona routing pass — the model decides who responds, and the orchestrator parses and dispatches.
+
+Memory is flat RAG over turn-pair exchanges, stored in a single SQLite database with on-disk vector search (sqlite-vec) and keyword search (FTS5), combined via Reciprocal Rank Fusion. One optional layer of abstraction sits on top: per-persona daily reflections.
 
 ## Design Principles
 
-1. **Finish before expanding.** Every feature ships complete or doesn't ship.
-2. **Modular boundaries.** Each subsystem can be understood, tested, and modified independently.
-3. **OpenRouter first.** One provider covers 200+ models. Add direct providers via the plugin system only when needed.
-4. **Config over constants.** Anything that was hardcoded in v2 now lives in `config/default.yaml`.
-5. **Simplicity over abstraction.** One level of memory (exchanges + daily reflections). No hierarchical clustering.
+1. **One model call, many voices.** The unified prompt replaces the old arbitrator + N per-persona calls. Lower latency, lower cost, more coherent cross-talk.
+2. **Single source of memory.** One SQLite file (`data/memory.db`) holds every persona's exchanges and reflections. Retrieval filters by `persona_name`.
+3. **OpenRouter only.** One OpenAI-compatible endpoint fronts 200+ models behind a single key. The model is a config value, not a code change.
+4. **Config over constants.** Behavior lives in `config/default.yaml`, overridable per-environment in `config/local.yaml` (gitignored).
+5. **Fail fast, degrade gracefully.** Startup validates tokens, config, and the embedding model. At runtime, a corrupt buffer or a failed memory write never takes the bot down.
 
-## Directory Structure
+## Request Flow
 
 ```
-House-v3/
-├── config/
-│   ├── default.yaml          # Shipped defaults (committed)
-│   └── local.yaml            # User overrides (.gitignored)
-│
-├── data/
-│   ├── models/               # Embedding models (nomic-embed ONNX)
-│   ├── personas/
-│   │   ├── soul/             # {name}_soul.txt — core identity
-│   │   ├── agent/            # {name}_agent.txt — behavioral rules
-│   │   ├── voice/            # {name}.txt — personality/tone
-│   │   └── shared/           # mother.txt, thresholds.txt
-│   └── shared/               # Runtime: shared memory JSONL + indexes
-│       ├── memory/           # exchanges.jsonl
-│       ├── relationships/    # {user_id}.json
-│       └── indexes/          # exchanges_vectors.npz
-│
-├── src/
-│   ├── providers/            # LLM provider plugin system
-│   │   ├── __init__.py
-│   │   ├── base.py           # BaseProvider ABC + retry logic
-│   │   ├── registry.py       # Provider registry + factory
-│   │   └── openrouter_provider.py  # Default provider
-│   │
-│   ├── memory/               # Flat RAG memory
-│   │   ├── __init__.py
-│   │   ├── models.py         # Data models (Exchange, DailyReflection, ...)
-│   │   ├── vector_index.py   # Numpy cosine similarity search
-│   │   └── store.py          # JSONL persistence + singleton management
-│   │
-│   ├── persona/              # Identity and prompt assembly
-│   │   ├── __init__.py
-│   │   ├── loader.py         # File-based persona prompt loading
-│   │   ├── assembler.py      # Multi-section prompt composition
-│   │   └── memory_instructions.py  # Per-persona memory-use templates
-│   │
-│   ├── conversation/         # Conversation state management
-│   │   ├── __init__.py
-│   │   └── buffer.py         # Sliding window buffer + persistence
-│   │
-│   ├── context/              # Context retrieval and formatting
-│   │   ├── __init__.py
-│   │   ├── manager.py        # "The Librarian" — orchestrates retrieval
-│   │   └── formatters.py     # Memory/state → prompt string formatters
-│   │
-│   ├── services/             # Business logic services
-│   │   ├── __init__.py
-│   │   ├── embedding_service.py       # ONNX text embedding (nomic-embed)
-│   │   ├── memory_service.py          # MemoryService — flat RAG API
-│   │   ├── daily_reflection_service.py # Per-persona daily summaries
-│   │   ├── state_manager.py           # Affective state + time decay
-│   │   └── query_inference_service.py # "Should I search memory?" decisions
-│   │
-│   ├── orchestrator.py       # Main pipeline: message → response
-│   │
-│   └── utils/                # Shared utilities
-│       ├── __init__.py
-│       ├── config.py         # YAML config loader with env overrides
-│       └── token_counter.py  # Token counting (tiktoken or heuristic)
-│
-├── filtered_conversations/   # Legacy GPT logs (6M tokens, not yet embedded)
-├── tests/                    # Test suite
-└── ARCHITECTURE.md           # This file
+User message in a watched channel
+  └─ Watcher bot (on_message)
+       ├─ trigger gating: only an @Girls role ping (whole house) or a
+       │   specific persona ping (that persona) is answered; else ignored
+       ├─ append to per-channel ConversationBuffer
+       └─ UnifiedOrchestrator.process_message()
+            ├─ query inference: "does this need a memory search?"
+            ├─ unified context retrieval (parallel memory search, all personas)
+            ├─ format contextual primer (memories + optional routing directive)
+            ├─ single LLM call (json_mode, unified system prompt)
+            ├─ response parser (JSON fallback chain + repetition guard + 2000-char cap)
+            └─ fire-and-forget post-process (record exchanges, bump engagement)
+  └─ Dispatch each non-null persona response via its own PersonaClient bot
 ```
+
+## Process Model
+
+A single process runs six `discord.py` clients on one asyncio loop (`src/discord_bot/runner.py`):
+
+- **Watcher** — no persona identity. Listens across watched channels, gates triggers, owns the conversation buffers and slash commands, calls the orchestrator, and dispatches responses.
+- **Five PersonaClients** — one bot per persona. Each only sends its own messages and handles 🔊 reactions for TTS. No routing logic.
+
+On startup the runner also kicks off a background **reflection catch-up** (see below).
 
 ## Memory Architecture
 
-### The Simplification (v2 → v3)
+### Exchange model
 
-v2 used RAPTOR: Exchange → Leaf → Branch → Tree via GMM clustering. This was removed because:
-- GMM clustering destroys temporal information (memories from different dates get merged by topic)
-- Branch/tree reflections freeze one interpretation at one moment; the persona's prompt already provides dynamic interpretation at inference time
-- The complexity wasn't earning its keep for the actual conversation volumes
+An exchange is a **turn pair**: one user message + one persona's response. In a multi-persona reply, the same user message produces several exchanges — one per responding persona — so each embedding ties user intent to a specific persona's voice, and retrieval can filter by `persona_name` ("my memories") or leave it open ("things I witnessed").
 
-v3 uses flat RAG: exchanges are embedded and searched directly by vector similarity.
+### Storage (SQLite, single file)
 
-### Exchange Model
+`data/memory.db`, opened with APSW (stdlib `sqlite3` on macOS can't load extensions):
 
-Each exchange is a **turn pair**: one user message + one persona's response.
+- `exchanges` + `exchanges_vec` (sqlite-vec, 768-d) + `exchanges_fts` (FTS5, trigger-synced)
+- `reflections` + `reflections_vec` + `reflections_fts`
+- `relationships`, `sessions`
+- WAL mode; writes serialized through a process-level lock since all worker threads share one connection.
 
-In multi-persona conversations (Discord), the same user message produces multiple exchanges — one per responding persona. This means:
-- Each embedding captures the relationship between user intent and a specific persona's response
-- Retrieval can filter by `persona_name` for "my memories" or leave unfiltered for "things I witnessed"
-- Attribution is clear — each record has exactly one persona
+### Hybrid search
 
-### Daily Reflections
+Vector similarity and keyword matches are each ranked, then fused with Reciprocal Rank Fusion (`k=60`). Falls back to vector-only if the FTS query can't be sanitized.
 
-One level of summarization, generated daily:
-- Midnight trigger checks for unreflected exchanges per persona
-- LLM generates a narrative summary from that persona's perspective
-- Summary is embedded for vector search
-- Preserves timeline (one reflection = one date)
-- Persona-scoped (each persona's reflections are private)
+### Daily reflections
 
-### Storage Layout
+One level of summarization. For a given date, all of a persona's unreflected exchanges are summarized by a cheaper model into a first-person diary entry, embedded, and stored; the source exchanges are marked `reflected`. Because the bot isn't guaranteed to be running at midnight, reflections are **not** on a timer — they run as a **startup catch-up**: on boot, any past date with unreflected exchanges is backfilled (today is left alone). Restarting the bot is the trigger.
 
-```
-data/
-├── shared/
-│   ├── memory/exchanges.jsonl        # All turn pairs from all personas
-│   ├── relationships/{user_id}.json  # Per-user relationship data
-│   └── indexes/exchanges_vectors.npz # Shared embedding index
-│
-├── elvira/
-│   ├── memory/reflections.jsonl      # Elvira's daily summaries
-│   ├── sessions/{id}.json            # Session state
-│   └── indexes/reflections_vectors.npz
-│
-├── frank/
-│   ├── memory/reflections.jsonl
-│   └── ...
-```
+## Subsystems (`src/`)
 
-## Subsystem Details
+| Area | Files | Role |
+|------|-------|------|
+| Orchestration | `unified_orchestrator.py` | The pipeline: context → single LLM call → parse → post-process |
+| Parsing | `response_parser.py` | JSON fallback chain, repetition guard, per-persona 2000-char cap |
+| Providers | `providers/base.py`, `providers/openrouter_provider.py`, `providers/registry.py` | OpenRouter via OpenAI-compatible API; factory + retry/error classification |
+| Memory | `memory/store.py`, `memory/models.py` | SQLite + sqlite-vec + FTS5; dataclasses (Exchange, DailyReflection, UserRelationship, SessionState) |
+| Services | `services/memory_service.py`, `services/embedding_service.py`, `services/daily_reflection_service.py`, `services/query_inference_service.py`, `services/state_manager.py`, `services/tts_service.py` | Memory API, ONNX embeddings, reflections, search gating, engagement/session state, Kokoro TTS |
+| Context | `context/unified_manager.py`, `context/formatters.py` | Parallel retrieval for all personas; memory/relationship → prompt strings |
+| Conversation | `conversation/buffer.py` | Per-channel sliding window with JSON persistence + archive |
+| Discord | `discord_bot/runner.py`, `discord_bot/watcher.py`, `discord_bot/persona_client.py` | Process entry point, coordinator, per-persona bots |
+| Utils | `utils/config.py`, `utils/paths.py`, `utils/io.py`, `utils/token_counter.py` | Config merge + env, project root, atomic I/O, token counting |
 
-### 1. Provider Plugin System (`src/providers/`)
+## Conversation Buffer
 
-Abstracts LLM API calls. OpenRouter is the default, supporting 200+ models through one API key.
+Per channel, keyed by channel **ID** (`discord_{channel_id}`) so the same channel name on different servers can't collide. The LLM sees the last `conversation.max_turns` (default 50) turns. The active buffer is capped at twice that; turns evicted past the cap are appended to an append-only archive (`data/sessions/discord_{id}_archive.jsonl`) rather than dropped, so the live buffer file stays small without losing history.
 
-Key classes:
-- `BaseProvider` — ABC with retry logic, error classification, parameter resolution
-- `OpenRouterProvider` — Default implementation (OpenAI-compatible API)
-- `@register_provider` decorator for adding new providers
+Other personas' prior messages are folded into history as attributed `user` turns, never `assistant` turns — otherwise the model reads them as its own past output and leaks identity.
 
-### 2. Memory (`src/memory/`)
+## State
 
-JSONL-backed persistence with in-memory caching and numpy vector indexes.
+`StateManager` (file-based, atomic writes) tracks **engagement** counts and per-session metadata under `data/state/{persona}/`. An earlier affective-state subsystem (emotional dimensions with time decay) was deprecated: it was never written to in the unified pipeline, so it never reached a prompt. User-projected affect — the model mirroring tone from the conversation itself — covers that ground without a background state machine.
 
-Key classes:
-- `MemoryStore` — JSONL CRUD, vector search, shared/persona isolation
-- `VectorIndex` — Numpy cosine similarity with `.npz` caching
-- `Exchange` — Turn pair model (user_msg + assistant_response + persona_name)
-- `DailyReflection` — Per-persona daily summary
+## Configuration
 
-### 3. Services (`src/services/`)
+`utils/config.py` deep-merges `config/default.yaml` then `config/local.yaml`, then applies `HOUSE_*` environment overrides. `local.yaml` is gitignored and is where per-environment values (model, channels, keys) belong. The Discord runner loads config through this same path, so local overrides apply.
 
-- `MemoryService` — Primary memory API: add_exchange(), search_memory()
-- `DailyReflectionService` — Generates per-persona daily summaries via LLM
-- `EmbeddingService` — ONNX nomic-embed singleton with async batch support
-- `StateManager` — Affective state with time-based decay
-- `QueryInferenceService` — Regex + LLM gating for memory search
+## What's Dead Code (intentionally kept)
 
-### 4. Persona (`src/persona/`)
-
-Prompt assembly: Soul + Agent + Voice + Memory instructions, composed per persona with caching.
-
-### 5. Context (`src/context/`)
-
-The "librarian" — decides what memory and state to include:
-1. Query inference: "Does this message need memory search?"
-2. Vector search over exchanges (filtered by persona)
-3. Vector search over daily reflections
-4. Relationship and affective state lookup
-
-### 6. Orchestrator (`src/orchestrator.py`)
-
-Full pipeline: query inference → context retrieval → prompt assembly → LLM generation → post-processing (record exchange, update state).
-
-## Dependency Graph
-
-```
-config/default.yaml
-    ↓
-src/utils/config.py  ← loaded by everything
-    ↓
-src/memory/models.py  ← no dependencies (pure data)
-src/memory/vector_index.py  ← numpy only
-src/memory/store.py  ← depends on models + vector_index
-    ↓
-src/services/embedding_service.py  ← ONNX runtime
-src/services/memory_service.py  ← depends on store + embedding
-src/services/daily_reflection_service.py  ← depends on store + embedding + provider
-src/services/state_manager.py  ← file I/O only
-src/services/query_inference_service.py  ← depends on provider
-    ↓
-src/persona/assembler.py  ← depends on loader + memory_instructions
-src/conversation/buffer.py  ← standalone
-src/context/manager.py  ← depends on memory_service + query_inference
-src/context/formatters.py  ← pure functions
-    ↓
-src/providers/openrouter_provider.py  ← depends on base + registry
-    ↓
-src/orchestrator.py  ← depends on everything above
-```
-
-No circular dependencies. All arrows point downward.
+- `context/manager.py` — legacy per-persona context manager, superseded by `unified_manager.py`.
+- Relationship tracking — `relationships` table, `save_relationship`, and the relational primer exist but nothing writes relationships yet. Slated for a future build-out; harmless until then.
+- Session-state methods on `StateManager` — present but not wired into the unified pipeline.
 
 ## What's Next
 
-- **Who responds logic**: Multi-persona routing for Discord (which persona(s) should respond to a given message)
-- **Legacy log import**: Tool to parse and embed the 6M tokens of GPT conversation logs
-- **Discord integration**: Bot framework connecting orchestrators to Discord channels
+- Build out the relationship/familiarity system (write path + richer primer).
+- Buffer-archive summarization (the evicted-turn archive exists; summarizing it back into context is not wired up).
+- A test suite (`tests/` is currently a stub).

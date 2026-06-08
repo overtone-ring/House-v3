@@ -3,11 +3,13 @@ Context Subsystem
 =================
 
 Handles context retrieval and formatting for prompt injection.
-The "librarian" — decides what memories and state to include in prompts.
+The "librarian" — decides what memories to include in prompts.
 
 Components:
-    - ContextManager: Orchestrates memory search + state retrieval
-    - formatters: Formats memories, affective state, and relational data for prompts
+    - UnifiedContextManager: parallel memory retrieval for all personas (the
+      live path; see unified_manager.py)
+    - ContextManager: legacy per-persona retriever, kept as dead code
+    - formatters: format memories and relational data for prompts
 """
 
 from .manager import ContextManager

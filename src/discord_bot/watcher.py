@@ -63,6 +63,10 @@ class Watcher(discord.Client):
         # Per-channel conversation buffers
         self._buffers: Dict[str, ConversationBuffer] = {}
         self._buffer_max_turns = self._config.get("conversation", {}).get("max_turns", 50)
+        # The active buffer holds more turns than the LLM window (headroom),
+        # but is still capped so the live file can't grow without bound. Turns
+        # evicted past this cap are archived, not dropped.
+        self._buffer_active_cap = self._buffer_max_turns * 2
 
         # Set of all persona bot user IDs (populated on_ready)
         self._persona_bot_ids: Set[int] = set()
@@ -477,6 +481,11 @@ class Watcher(discord.Client):
         except discord.HTTPException:
             pass
 
+        # ── Cap active buffer; archive evicted turns ─────────────
+        expired = buffer.trim(self._buffer_active_cap)
+        if expired:
+            self._archive_turns(channel_id, expired)
+
         # ── Persist buffer ───────────────────────────────────────
         if buffer.is_dirty:
             try:
@@ -504,6 +513,23 @@ class Watcher(discord.Client):
             )
 
         return self._buffers[channel_id]
+
+    def _archive_turns(self, channel_id: int, turns: list) -> None:
+        """Append evicted buffer turns to the channel's archive (one JSON per line)."""
+        data_dir = self._config.get("memory", {}).get("data_dir", "./data")
+        path = Path(
+            ConversationBuffer.archive_file_path(f"discord_{channel_id}", data_dir)
+        )
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                for turn in turns:
+                    f.write(json.dumps(turn.to_dict()) + "\n")
+            logger.info(
+                f"[Watcher] Archived {len(turns)} evicted turn(s) for channel {channel_id}"
+            )
+        except OSError as e:
+            logger.warning(f"[Watcher] Failed to archive turns: {e}")
 
     # ── Watch State Persistence ──────────────────────────────────
 

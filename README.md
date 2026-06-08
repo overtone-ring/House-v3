@@ -92,7 +92,7 @@ All settings are in `config/default.yaml`. To override for your environment, cre
 
 Key settings:
 - `provider.model` -- which LLM to use (via OpenRouter)
-- `discord.channels` -- channels to listen in (empty = all)
+- `discord.channels` -- channels to auto-watch on startup by name (empty = watch nothing until you run `/watch`)
 - `tts.provider` -- set to `kokoro` for voice, or remove to disable
 
 ## Managing data

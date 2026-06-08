@@ -45,16 +45,18 @@ def _load_env(env_path: Optional[str] = None) -> None:
 
 
 def _load_config() -> dict:
-    """Load the app config from default.yaml. Fails fast if missing or incomplete."""
-    import yaml
+    """Load the app config (default.yaml + local.yaml overrides + env).
 
-    config_path = Path.cwd() / "config" / "default.yaml"
-    if not config_path.exists():
-        logger.error(f"Required config not found: {config_path}")
+    Delegates to utils.config.load_config so config/local.yaml is actually
+    merged in — the previous implementation read default.yaml only, silently
+    ignoring every local override. Fails fast if missing or incomplete.
+    """
+    from ..utils.config import load_config
+
+    config = load_config()
+    if not config:
+        logger.error("No config loaded — is config/default.yaml present?")
         sys.exit(1)
-
-    with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
 
     required = ["personas", "provider"]
     missing = [k for k in required if k not in config]
@@ -63,6 +65,47 @@ def _load_config() -> dict:
         sys.exit(1)
 
     return config
+
+
+async def _run_reflection_catchup(config: dict) -> None:
+    """Backfill any missed daily reflections on startup.
+
+    Because the bot isn't guaranteed to be running at midnight, reflections
+    can't rely on a timer. Instead, on every startup we look for exchanges
+    from past dates that were never reflected on, and generate those summaries
+    now. Today's exchanges are left alone (the day may still be in progress).
+    """
+    try:
+        from datetime import datetime, timezone
+        from ..memory.store import get_store
+        from ..services.daily_reflection_service import DailyReflectionService
+
+        store = await get_store(config)
+        unreflected = await store.get_unreflected_exchanges()
+        if not unreflected:
+            return
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        past_dates = sorted({
+            ex.get("timestamp", "")[:10]
+            for ex in unreflected
+            if len(ex.get("timestamp", "")) >= 10 and ex.get("timestamp", "")[:10] < today
+        })
+
+        if not past_dates:
+            logger.info("Reflection catch-up: nothing to backfill (only today's exchanges)")
+            return
+
+        service = DailyReflectionService(config)
+        await service.initialize()
+        logger.info(f"Reflection catch-up: backfilling {len(past_dates)} date(s): {past_dates}")
+
+        for date in past_dates:
+            results = await service.run_for_all_personas(date=date)
+            written = sum(1 for r in results.values() if r.get("reflection_id"))
+            logger.info(f"Reflection catch-up {date}: {written} reflection(s) written")
+    except Exception as e:
+        logger.error(f"Reflection catch-up failed: {e}", exc_info=True)
 
 
 async def run_house(env_path: Optional[str] = None) -> None:
@@ -170,6 +213,15 @@ async def run_house(env_path: Optional[str] = None) -> None:
     tasks.append(
         asyncio.create_task(
             _start_bot(watcher, watcher_token, "watcher")
+        )
+    )
+
+    # Backfill any missed daily reflections in the background so it doesn't
+    # delay the bot fleet coming online.
+    catchup_task = asyncio.create_task(_run_reflection_catchup(config))
+    catchup_task.add_done_callback(
+        lambda t: t.cancelled() or (
+            t.exception() and logger.error(f"Reflection catch-up task error: {t.exception()}")
         )
     )
 
