@@ -26,6 +26,9 @@ logs/
 *.swp
 *.swo
 
+# Claude / Cowork session artifacts
+.claude/
+
 # Testing
 .pytest_cache/
 htmlcov/
