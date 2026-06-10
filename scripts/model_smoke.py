@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.providers import create_provider_from_config
-from src.response_parser import parse_house_response
+from src.response_parser import parse_house_turns
 
 # Paid OpenRouter pricing for gemma-4-31b-it, $/1M tokens (in, out)
 PRICE_IN, PRICE_OUT = 0.12, 0.37
@@ -71,12 +71,13 @@ def main():
             continue
         latency = time.monotonic() - start
 
-        responses = parse_house_response(
+        turns = parse_house_turns(
             result.text, valid_personas=personas, default_persona=fallback
         )
 
-        spoke = [p for p, r in responses.items() if r]
-        print(f"  routed→ {result.model} | {latency:.1f}s | spoke: {', '.join(spoke) or 'NONE'}")
+        spoke = list(dict.fromkeys(t["persona"] for t in turns))
+        print(f"  routed→ {result.model} | {latency:.1f}s | "
+              f"{len(turns)} turn(s), spoke: {', '.join(spoke) or 'NONE'}")
         if result.usage:
             u = result.usage
             cost = u["prompt_tokens"] / 1e6 * PRICE_IN + u["completion_tokens"] / 1e6 * PRICE_OUT
@@ -84,10 +85,8 @@ def main():
             print(f"  tokens: {u['prompt_tokens']} in / {u['completion_tokens']} out "
                   f"| paid-rate cost: ${cost:.5f}")
         print()
-        for persona in personas:
-            text = responses.get(persona)
-            if text:
-                print(f"  ▸ {persona.upper()}: {text}\n")
+        for turn in turns:
+            print(f"  ▸ {turn['persona'].upper()}: {turn['text']}\n")
 
         if not spoke:
             print(f"  RAW (parse produced nothing):\n  {result.text[:500]}\n")

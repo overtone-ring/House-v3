@@ -2,7 +2,7 @@
 
 ## Overview
 
-House is a multi-persona Discord bot. Five personas (Elvira, Frank, Zagna, Vireline, Ellie) share **one** LLM call: a single unified system prompt asks the model to inhabit all five voices at once and return structured JSON saying who speaks and what they say. There is no arbitrator and no per-persona routing pass — the model decides who responds, and the orchestrator parses and dispatches.
+House is a multi-persona Discord bot. Five personas (Elvira, Frank, Zagna, Vireline, Ellie) share **one** LLM call: a single unified system prompt asks the model to inhabit all five voices at once and return a **scene** — an ordered JSON array of turns (`{"turns": [{"speaker", "text"}, ...]}`). Personas may take multiple turns in one scene, reacting to each other, and the turns are dispatched to Discord in order. There is no arbitrator and no per-persona routing pass — the model decides who responds and in what order, and the orchestrator parses and dispatches.
 
 Memory is flat RAG over turn-pair exchanges, stored in a single SQLite database with on-disk vector search (sqlite-vec) and keyword search (FTS5), combined via Reciprocal Rank Fusion. One optional layer of abstraction sits on top: per-persona daily reflections.
 
@@ -27,9 +27,11 @@ User message in a watched channel
             ├─ unified context retrieval (parallel memory search, all personas)
             ├─ format contextual primer (memories + optional routing directive)
             ├─ single LLM call (json_mode, unified system prompt)
-            ├─ response parser (JSON fallback chain + repetition guard + 2000-char cap)
+            ├─ response parser (ordered turns + fallback chain + repetition
+            │   guard + 6000-char runaway cap; Discord layer splits >2000)
             └─ fire-and-forget post-process (record exchanges, bump engagement)
-  └─ Dispatch each non-null persona response via its own PersonaClient bot
+  └─ Dispatch turns in scene order via each persona's own PersonaClient bot,
+      with a short typing beat between turns
 ```
 
 ## Process Model

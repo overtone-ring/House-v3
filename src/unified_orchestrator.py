@@ -10,7 +10,8 @@ Flow:
     2. Unified context retrieval: memories + affective state for all personas
     3. Prompt assembly: unified system prompt + context + history + user input
     4. Single LLM call with json_mode
-    5. Parse JSON into per-persona responses
+    5. Parse JSON into an ordered list of turns (personas may speak
+       multiple times — the response is a scene, not five slots)
     6. Post-process: record exchanges, update state per responding persona
 """
 
@@ -27,7 +28,7 @@ from .context.formatters import format_unified_context
 from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
-from .response_parser import parse_house_response
+from .response_parser import parse_house_turns
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,7 @@ class UnifiedOrchestrator:
         channel_name: Optional[str] = None,
         conversation_buffer: Optional[ConversationBuffer] = None,
         forced_personas: Optional[set] = None,
-    ) -> Dict[str, Optional[str]]:
+    ) -> List[Dict[str, str]]:
         """
         Process a user message through the unified pipeline.
 
@@ -139,9 +140,9 @@ class UnifiedOrchestrator:
                 summoned (@Girls) and the model decides who speaks.
 
         Returns:
-            Dict mapping persona names to response text.
-            None values indicate the persona stayed silent.
-            Example: {"elvira": "response...", "frank": null, "zagna": "text"}
+            Ordered list of turns: [{"persona": name, "text": str}, ...].
+            Personas may appear more than once (back-and-forth). An empty
+            list means the House stays silent.
         """
         # Step 1: Retrieve unified context
         recent_context = None
@@ -194,9 +195,9 @@ class UnifiedOrchestrator:
             conversation_history=conversation_history,
         )
 
-        # Step 5: Parse response
+        # Step 5: Parse response into an ordered scene
         if self._json_mode:
-            responses = parse_house_response(
+            turns = parse_house_turns(
                 response_text,
                 valid_personas=self.personas,
                 default_persona=self._fallback_persona,
@@ -205,51 +206,49 @@ class UnifiedOrchestrator:
             # Plain-text mode: entire response goes to the fallback persona.
             # Intended for single-persona configurations where JSON shaping
             # is dead weight on the model.
-            responses = {p: None for p in self.personas}
-            responses[self._fallback_persona] = response_text.strip() or None
+            text = response_text.strip()
+            turns = [{"persona": self._fallback_persona, "text": text}] if text else []
 
         # Visibility: who the model actually chose to speak as, before any
         # forced-persona filtering. This is the ground truth of the generation.
-        spoke_before = [p for p, r in responses.items() if r]
+        spoke_before = list(dict.fromkeys(t["persona"] for t in turns))
         logger.info(
-            f"Model produced responses for: {spoke_before or 'NONE'}"
+            f"Model produced {len(turns)} turn(s) from: {spoke_before or 'NONE'}"
             + (f" | forced={sorted(forced_personas)}" if forced_personas else "")
         )
 
         # Hard guarantee: when specific personas were addressed, silence anyone
         # else the model may have let speak anyway.
         if forced_personas:
-            filtered = {
-                p: (r if p in forced_personas else None)
-                for p, r in responses.items()
-            }
+            filtered = [t for t in turns if t["persona"] in forced_personas]
             # Never discard a real generation silently. If the model produced
             # output but spoke only as wrong/unaddressed persona(s), the filter
             # just blanked everything — the silent-dead-air bug. Reroute the
             # discarded text to an addressed persona instead of going quiet.
             # This also covers error placeholders, which always land on the
             # fallback persona and would otherwise vanish here.
-            if spoke_before and not any(filtered.values()):
+            if turns and not filtered:
                 target = sorted(forced_personas)[0]
-                source = (
-                    self._fallback_persona
-                    if responses.get(self._fallback_persona)
-                    else spoke_before[0]
+                source_turns = (
+                    [t for t in turns if t["persona"] == self._fallback_persona]
+                    or turns
                 )
                 logger.warning(
                     "Forced-persona filter would discard the ENTIRE generation: "
                     f"model spoke as {spoke_before} but only {sorted(forced_personas)} "
                     f"{'was' if len(forced_personas) == 1 else 'were'} addressed. "
-                    f"Rerouting {source}'s text to {target} instead of dead air."
+                    f"Rerouting {len(source_turns)} turn(s) to {target} instead of dead air."
                 )
-                filtered[target] = responses[source]
-            responses = filtered
+                filtered = [
+                    {"persona": target, "text": t["text"]} for t in source_turns
+                ]
+            turns = filtered
 
         # Step 6: Post-process (async, don't block response delivery)
         task = asyncio.create_task(
             self._post_process(
                 user_input=user_input,
-                responses=responses,
+                turns=turns,
                 session_id=session_id,
                 user_id=user_id,
                 conversation_buffer=conversation_buffer,
@@ -258,7 +257,7 @@ class UnifiedOrchestrator:
         self._pending_tasks.add(task)
         task.add_done_callback(self._on_post_process_done)
 
-        return responses
+        return turns
 
     # ── Generation ───────────────────────────────────────────────
 
@@ -288,7 +287,7 @@ class UnifiedOrchestrator:
     async def _post_process(
         self,
         user_input: str,
-        responses: Dict[str, Optional[str]],
+        turns: List[Dict[str, str]],
         session_id: Optional[str],
         user_id: Optional[str],
         conversation_buffer: Optional[ConversationBuffer] = None,
@@ -296,12 +295,18 @@ class UnifiedOrchestrator:
         """
         Record exchanges and update state for each responding persona.
 
+        A persona may take several turns in one scene — they're joined into
+        a single exchange so memory keeps one record per persona per message.
+
         Runs async after responses are dispatched to Discord.
         """
-        for persona_name, response_text in responses.items():
-            if response_text is None:
-                continue
+        combined: Dict[str, List[str]] = {}
+        for turn in turns:
+            combined.setdefault(turn["persona"], []).append(turn["text"])
 
+        participants = list(combined.keys())
+
+        for persona_name, texts in combined.items():
             try:
                 # Record exchange in memory
                 memory_service = self._memory_services.get(persona_name)
@@ -309,10 +314,8 @@ class UnifiedOrchestrator:
                     await memory_service.add_exchange(
                         session_id=session_id or "",
                         user_msg=user_input,
-                        assistant_response=response_text,
-                        participants=[
-                            p for p, r in responses.items() if r is not None
-                        ],
+                        assistant_response="\n\n".join(texts),
+                        participants=participants,
                         metadata={"user_id": user_id} if user_id else None,
                     )
 

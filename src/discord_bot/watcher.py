@@ -568,7 +568,7 @@ class Watcher(discord.Client):
 
         # ── Orchestrate (single unified call) ────────────────────
         try:
-            responses = await self._house.process_message(
+            turns = await self._house.process_message(
                 user_input=cleaned_input,
                 session_id=f"discord_{channel_id}",
                 user_id=str(message.author.id),
@@ -584,9 +584,12 @@ class Watcher(discord.Client):
                 pass
             return
 
-        # ── Dispatch responses ───────────────────────────────────
-        for persona_name, response_text in responses.items():
-            if response_text is None or not response_text.strip():
+        # ── Dispatch turns in scene order ────────────────────────
+        dispatched = 0
+        for turn in turns:
+            persona_name = turn["persona"]
+            response_text = turn["text"]
+            if not response_text.strip():
                 continue
 
             # Find the persona client
@@ -606,9 +609,16 @@ class Watcher(discord.Client):
                     )
                     continue
 
+            # A short beat between turns so the scene reads like a room
+            # talking, not a burst — scaled to the turn's length. The first
+            # turn goes out immediately.
+            beat = 0.0 if dispatched == 0 else min(1.0 + len(response_text) / 150, 4.0)
+
             # Show typing indicator from the persona bot while sending
             try:
                 async with persona_channel.typing():
+                    if beat:
+                        await asyncio.sleep(beat)
                     sent_messages = await client.send_long_response(
                         persona_channel, response_text
                     )
@@ -619,13 +629,14 @@ class Watcher(discord.Client):
 
             # Record in buffer
             if sent_messages:
+                dispatched += 1
                 buffer.add_assistant_response(
                     content=response_text,
                     persona=persona_name,
                 )
 
             logger.info(
-                f"[Watcher] #{channel_name} | {persona_name} responded "
+                f"[Watcher] #{channel_name} | {persona_name} spoke "
                 f"({len(response_text)} chars)"
             )
 

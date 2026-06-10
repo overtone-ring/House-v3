@@ -1,6 +1,6 @@
 # House-v3
 
-Multi-persona Discord bot — one LLM call generates all five persona responses as structured JSON. No per-persona routing, no arbitrator. Single unified prompt, single model call, structured dispatch.
+Multi-persona Discord bot — one LLM call generates a scene: an ordered JSON array of turns where any of the five personas can speak (more than once — they react to each other). No per-persona routing, no arbitrator. Single unified prompt, single model call, dispatch in scene order.
 
 ## Who is the user
 
@@ -23,8 +23,8 @@ Requires `.env` with `OPENROUTER_API_KEY` and `DISCORD_TOKEN_WATCHER`, `DISCORD_
 User message → Watcher bot → UnifiedOrchestrator.process_message()
   → Context retrieval (parallel memory search across all personas)
   → Single LLM call (json_mode, unified system prompt)
-  → Response parser (JSON fallback chain + repetition guard)
-  → Dispatch to PersonaClients (each persona is its own Discord bot)
+  → Response parser (ordered turns + fallback chain + repetition guard)
+  → Dispatch turns in scene order to PersonaClients (each persona is its own Discord bot)
   → Fire-and-forget post-processing (record to memory, update engagement)
 ```
 
@@ -37,7 +37,7 @@ See `ARCHITECTURE.md` for the full design write-up (request flow, memory model, 
 | File | What it does |
 |------|-------------|
 | `src/unified_orchestrator.py` | Core pipeline — context → LLM → parse → post-process |
-| `src/response_parser.py` | JSON parsing with 4-layer fallback, repetition detection, 2000 char limit |
+| `src/response_parser.py` | Parses `{"turns": [...]}` into an ordered scene; fallbacks (legacy dict → prose), repetition guard, 6000-char runaway cap |
 | `src/memory/store.py` | SQLite + sqlite-vec + FTS5 via APSW. Hybrid search (vector + keyword via RRF) |
 | `src/memory/models.py` | Dataclasses: Exchange, DailyReflection, UserRelationship, SessionState |
 | `src/services/memory_service.py` | Memory API — `add_exchange()`, `search_memory()` (hybrid search) |
@@ -90,7 +90,8 @@ Known-dead keys (present in YAML but not read by any code): `memory.search.min_s
 - **Session IDs use channel ID** (`discord_{channel_id}`), not channel name — prevents cross-server buffer collision
 - **Ping-gating** — the House only speaks when summoned (`@Girls`, persona ping, or reply to a persona). Built for deployment on a public server
 - **Affective state was deprecated** — an earlier subsystem (emotional dimensions with time decay) was never written to in the unified pipeline and never reached a prompt. `StateManager` now tracks engagement + sessions only. Leftover: `format_affective_primer()` in `formatters.py` is unused
-- **Response parser** truncates at 2000 chars (Discord limit) and detects repetition loops (DeepSeek v3.2 degenerated once)
+- **Responses are scenes** — the model outputs `{"turns": [{"speaker", "text"}, ...]}`; personas may take multiple turns (back-and-forth) and the watcher dispatches them in order with short typing beats between turns. Legacy `{persona: text}` output still parses (one turn per persona, key order)
+- **Response parser** caps each turn at 6000 chars as a runaway guard — the persona client splits anything over Discord's 2000 into multiple messages — and detects repetition loops (DeepSeek v3.2 degenerated once)
 - **System prompt is loaded once at startup** and cached — restart the bot to pick up prompt changes
 - **Post-processing is fire-and-forget** — responses dispatch immediately, memory recording happens async (tasks held in `_pending_tasks`, drained on shutdown)
 - **Conversation buffer** tags user turns with `[speaker_name]:` and assistant turns with `[persona_name]:` for multi-user support
