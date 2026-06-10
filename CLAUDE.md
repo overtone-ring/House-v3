@@ -95,6 +95,7 @@ Known-dead keys (present in YAML but not read by any code): `memory.search.min_s
 - **System prompt is loaded once at startup** and cached — restart the bot to pick up prompt changes
 - **Post-processing is fire-and-forget** — responses dispatch immediately, memory recording happens async (tasks held in `_pending_tasks`, drained on shutdown)
 - **Conversation buffer** tags user turns with `[speaker_name]:` and assistant turns with `[persona_name]:` for multi-user support
+- **Multi-user aware** — the watcher tags the current message `[name]:` to match the buffer's history tagging, and when the trigger is a Discord reply it prepends a `[replying to name: "…"]` anchor resolved from the message reference (works for unpinged/old messages the buffer never saw). The prompt's THE ROOM section defines the conventions; Locke is the House's builder, not the assumed speaker
 - **Provider is swappable** — change `provider.model` in config. Current primary: Gemma 4 31B (validated — distinct persona voices, ~$0.0007/msg). Also tested: Qwen3-235B (stable, now reflection-only), DeepSeek v3.2 (degenerated)
 
 ## Personas

@@ -32,10 +32,12 @@ from src.response_parser import parse_house_turns
 # Paid OpenRouter pricing for gemma-4-31b-it, $/1M tokens (in, out)
 PRICE_IN, PRICE_OUT = 0.12, 0.37
 
+# Mirrors production input: the watcher tags the current speaker [name]:
+# and prepends a [replying to ...] anchor when the message is a Discord reply.
 TEST_MESSAGES = [
-    "@Girls I've been staring at the same problem for three days and I feel like I'm losing my mind. Tell me something real.",
-    "elvira, what are you thinking about right now?",
-    "Okay strategists — if I want to ship this bot to a 100-person server next week, what's the one thing I absolutely cannot skip?",
+    "[Locke]: @Girls I've been staring at the same problem for three days and I feel like I'm losing my mind. Tell me something real.",
+    "[DieselDave]: elvira, what are you thinking about right now?",
+    '[replying to Frank: "You don\'t have to thank me. Just don\'t fall apart when I\'m not looking."]\n[Sarah_K]: wait, do you actually care about us or is this all an act?',
 ]
 
 

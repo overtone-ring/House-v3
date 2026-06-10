@@ -566,10 +566,22 @@ class Watcher(discord.Client):
             speaker_name=user_name,
         )
 
+        # ── Attribute the current message ────────────────────────
+        # History turns carry [name]: tags via the buffer, but the current
+        # message is passed to the model separately — tag it the same way so
+        # the model knows who is speaking *now* (and memory stores who said
+        # what). If this is a Discord reply, anchor it with a quote of the
+        # replied-to message, which may be old, unpinged, or pre-restart —
+        # none of which the buffer would have.
+        attributed_input = f"[{user_name}]: {cleaned_input}"
+        reply_context = await self._reply_context(message)
+        if reply_context:
+            attributed_input = f"{reply_context}\n{attributed_input}"
+
         # ── Orchestrate (single unified call) ────────────────────
         try:
             turns = await self._house.process_message(
-                user_input=cleaned_input,
+                user_input=attributed_input,
                 session_id=f"discord_{channel_id}",
                 user_id=str(message.author.id),
                 channel_name=channel_name,
@@ -817,6 +829,40 @@ class Watcher(discord.Client):
 
         seen: Set[str] = set()
         return [p for p in found if not (p in seen or seen.add(p))]
+
+    async def _reply_context(self, message: discord.Message) -> Optional[str]:
+        """If the message is a Discord reply, return a compact quote of the
+        replied-to message for the model: [replying to name: "snippet"].
+
+        Uses the reference Discord attaches to the incoming message
+        (`reference.resolved`), falling back to one API fetch for uncached
+        messages. Returns None for non-replies, deleted targets, or fetch
+        failures — the reply still processes, just without the anchor.
+        """
+        ref = message.reference
+        if ref is None:
+            return None
+
+        resolved = getattr(ref, "resolved", None)
+        ref_msg = resolved if isinstance(resolved, discord.Message) else None
+        if ref_msg is None and resolved is None and ref.message_id:
+            try:
+                ref_msg = await message.channel.fetch_message(ref.message_id)
+            except discord.HTTPException:
+                logger.info("[Watcher] Couldn't fetch replied-to message — skipping anchor")
+        if ref_msg is None:  # deleted target or failed fetch
+            return None
+
+        # Persona messages get their persona name; humans their display name
+        persona = self._persona_id_map().get(ref_msg.author.id)
+        name = persona.capitalize() if persona else ref_msg.author.display_name
+
+        snippet = " ".join(ref_msg.content.split())
+        if not snippet:
+            return None
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "…"
+        return f'[replying to {name}: "{snippet}"]'
 
     def _girls_role_mentioned(self, message: discord.Message) -> bool:
         """True if the message pings the shared house role (@Girls)."""

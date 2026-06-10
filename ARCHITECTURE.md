@@ -22,6 +22,8 @@ User message in a watched channel
        ├─ trigger gating: only an @Girls role ping (whole house) or a
        │   specific persona ping (that persona) is answered; else ignored
        ├─ append to per-channel ConversationBuffer
+       ├─ speaker attribution: current message tagged [name]:; Discord
+       │   replies get a [replying to name: "…"] anchor from the reference
        └─ UnifiedOrchestrator.process_message()
             ├─ query inference: "does this need a memory search?"
             ├─ unified context retrieval (parallel memory search, all personas)
