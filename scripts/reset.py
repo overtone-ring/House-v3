@@ -5,9 +5,11 @@ House-v3 Data Reset
 
 Two modes:
     python scripts/reset.py nuke     — wipe everything (memory, state, buffers, logs)
-    python scripts/reset.py today    — wipe only today's data (exchanges, reflections, buffers)
+    python scripts/reset.py today    — wipe today's exchanges/reflections, plus ALL
+                                       conversation buffers and engagement state
+                                       (buffers/state are not date-scoped)
 
-Run from the House-v3 directory.
+Paths are anchored to the project root, so it's safe to run from anywhere.
 """
 
 import argparse
@@ -23,24 +25,47 @@ except ImportError:
     print("ERROR: apsw not installed. Run: pip install apsw")
     sys.exit(1)
 
+# Anchor everything to the project root (this script's parent directory),
+# never cwd — `reset.py nuke -y` run from $HOME must not rmtree ~/logs.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into base (same semantics as utils.config)."""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
 
 def load_config() -> dict:
-    """Load config to find data paths."""
+    """Load config to find data paths — default.yaml + local.yaml overrides,
+    same as the bot, so we delete the same tree the bot actually writes to."""
     try:
         import yaml
-        config_path = Path.cwd() / "config" / "default.yaml"
+    except ImportError:
+        return {}
+
+    config: dict = {}
+    for name in ("default.yaml", "local.yaml"):
+        config_path = PROJECT_ROOT / "config" / name
         if config_path.exists():
             with open(config_path) as f:
-                return yaml.safe_load(f) or {}
-    except ImportError:
-        pass
-    return {}
+                config = _deep_merge(config, yaml.safe_load(f) or {})
+    return config
 
 
 def get_paths(config: dict) -> dict:
-    """Resolve all data directories."""
+    """Resolve all data directories (relative paths anchored to project root)."""
     data_dir = Path(config.get("memory", {}).get("data_dir", "./data"))
     log_dir = Path(config.get("logging", {}).get("log_dir", "./logs"))
+    if not data_dir.is_absolute():
+        data_dir = PROJECT_ROOT / data_dir
+    if not log_dir.is_absolute():
+        log_dir = PROJECT_ROOT / log_dir
 
     return {
         "data_dir": data_dir,
@@ -162,7 +187,11 @@ def reset_today(config: dict, skip_confirm: bool = False) -> None:
         conn.close()
         return
 
-    if not skip_confirm and not confirm(f"remove today's data ({today})"):
+    if not skip_confirm and not confirm(
+        f"remove today's exchanges and reflections ({today}), "
+        f"plus ALL conversation buffers and ALL engagement state "
+        f"(buffers/state are not date-scoped)"
+    ):
         print("   Cancelled.")
         conn.close()
         return

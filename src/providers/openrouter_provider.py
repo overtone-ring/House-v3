@@ -57,6 +57,11 @@ class OpenRouterProvider(BaseProvider):
         return OpenAI(
             api_key=self.config.api_key,
             base_url=base_url,
+            # SDK defaults are 600s timeout + 2 internal retries, which stack
+            # under _call_with_retry's 3 attempts — a hung connection could
+            # hold a message for many minutes. Our retry layer is the only one.
+            timeout=120.0,
+            max_retries=0,
             default_headers={
                 "HTTP-Referer": "https://github.com/house-v3",
                 "X-Title": "House-v3",

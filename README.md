@@ -108,7 +108,8 @@ Key settings:
 ### Scripts (run from House-v3 directory)
 
 ```bash
-# Remove today's exchanges, reflections, conversation buffers, and affective state
+# Remove today's exchanges and reflections — plus ALL conversation buffers
+# and ALL engagement state (not just today's)
 python scripts/reset.py today
 
 # Full factory reset -- deletes all memory, state, buffers, and logs
@@ -146,7 +147,7 @@ Note: when deleting exchanges manually, also delete the matching row from `excha
 
 ## Architecture
 
-See `CLAUDE.md` for full architecture details, key files, and design decisions.
+See `ARCHITECTURE.md` for the full design write-up and `CLAUDE.md` for the key-files map and design decisions.
 
 ```
 User message -> Watcher bot -> UnifiedOrchestrator.process_message()

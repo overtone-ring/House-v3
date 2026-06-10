@@ -26,6 +26,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -96,6 +97,25 @@ class Watcher(discord.Client):
         # bot summons only that persona; a message with neither is ignored.
         self._girls_role_name: str = discord_config.get("girls_role", "Girls").lower()
 
+        # Abuse guards for public servers: per-user trigger cooldown, and a cap
+        # on how many messages may wait behind a channel's processing lock.
+        # Throttled messages get a 🕐 reaction instead of queueing an LLM call.
+        self._user_cooldown_seconds = float(
+            discord_config.get("user_cooldown_seconds", 8)
+        )
+        self._max_queued_per_channel = int(
+            discord_config.get("max_queued_per_channel", 3)
+        )
+        self._last_trigger_at: Dict[int, float] = {}  # user_id → time.monotonic()
+        self._queued_count: Dict[int, int] = {}  # channel_id → waiting messages
+
+        # on_ready re-fires on every new gateway session; one-time setup
+        # (watch state load, command sync) must not re-run on reconnect.
+        self._ready_initialized = False
+        # Set once first-ready setup finishes (watch state loaded) — lets
+        # announce_system() wait until the channel list actually exists.
+        self._setup_done: asyncio.Event = asyncio.Event()
+
         # Persistence file for watched channels
         data_dir = self._config.get("memory", {}).get("data_dir", "./data")
         self._watch_state_path = Path(data_dir) / "discord_watch_state.json"
@@ -109,11 +129,37 @@ class Watcher(discord.Client):
     def _register_commands(self):
         """Register all slash commands on the command tree."""
 
+        def admin_only(interaction: discord.Interaction) -> bool:
+            # Runtime backstop: default_permissions is only a *default* — any
+            # server's admins can re-grant these commands to @everyone via
+            # Integrations settings, and DMs have no permission model at all.
+            perms = getattr(interaction.user, "guild_permissions", None)
+            return bool(perms and perms.administrator)
+
+        @self.tree.error
+        async def on_command_error(
+            interaction: discord.Interaction,
+            error: app_commands.AppCommandError,
+        ):
+            if isinstance(error, app_commands.CheckFailure):
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "Admin only.", ephemeral=True
+                    )
+                return
+            logger.error(f"[Watcher] Slash command error: {error}", exc_info=error)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "Command failed — check the logs.", ephemeral=True
+                )
+
         @self.tree.command(
             name="watch",
             description="Start watching a channel — the personas will respond to messages here",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         @app_commands.describe(channel="The channel to start watching")
         async def watch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.add(channel.id)
@@ -129,6 +175,8 @@ class Watcher(discord.Client):
             description="Stop watching a channel — personas will no longer respond here",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         @app_commands.describe(channel="The channel to stop watching")
         async def unwatch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.discard(channel.id)
@@ -145,6 +193,8 @@ class Watcher(discord.Client):
             description="List all currently watched channels",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         async def channels(interaction: discord.Interaction):
             if not self._watched_channel_ids:
                 await interaction.response.send_message(
@@ -171,6 +221,8 @@ class Watcher(discord.Client):
             description="Show the bot fleet status — who's online, what's being watched",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         async def status(interaction: discord.Interaction):
             lines = ["**Bot Fleet Status**\n"]
 
@@ -204,6 +256,8 @@ class Watcher(discord.Client):
             description="Set a default persona for a channel — skips the arbitrator",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         @app_commands.describe(
             channel="The channel to set a default for",
             persona="The persona who always responds in this channel",
@@ -235,6 +289,8 @@ class Watcher(discord.Client):
             description="Remove the default persona for a channel — use the arbitrator again",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         @app_commands.describe(channel="The channel to clear the default for")
         async def clear_default(
             interaction: discord.Interaction,
@@ -259,26 +315,35 @@ class Watcher(discord.Client):
             description="Clear the conversation history for a channel — fresh start",
         )
         @app_commands.default_permissions(administrator=True)
+        @app_commands.guild_only()
+        @app_commands.check(admin_only)
         @app_commands.describe(channel="The channel to reset")
         async def reset_buffer(
             interaction: discord.Interaction,
             channel: discord.TextChannel,
         ):
-            if channel.id in self._buffers:
-                self._buffers[channel.id].clear()
-                del self._buffers[channel.id]
+            # Take the channel's processing lock so an in-flight message
+            # (holding the old buffer object) can't re-save it after the
+            # reset, silently undoing it. The lock may be held by an LLM
+            # call for several seconds — defer to stay within Discord's
+            # 3-second interaction window.
+            await interaction.response.defer(ephemeral=True)
+            async with self._channel_locks.setdefault(channel.id, asyncio.Lock()):
+                if channel.id in self._buffers:
+                    self._buffers[channel.id].clear()
+                    del self._buffers[channel.id]
 
-            # Delete the persisted buffer file too
-            data_dir = self._config.get("memory", {}).get("data_dir", "./data")
-            buf_path = Path(
-                ConversationBuffer.session_file_path(
-                    f"discord_{channel.id}", data_dir
+                # Delete the persisted buffer file too
+                data_dir = self._config.get("memory", {}).get("data_dir", "./data")
+                buf_path = Path(
+                    ConversationBuffer.session_file_path(
+                        f"discord_{channel.id}", data_dir
+                    )
                 )
-            )
-            if buf_path.exists():
-                buf_path.unlink()
+                if buf_path.exists():
+                    buf_path.unlink()
 
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"Conversation buffer for **#{channel.name}** has been cleared.",
                 ephemeral=True,
             )
@@ -296,15 +361,28 @@ class Watcher(discord.Client):
                 self._persona_id_to_name[client.user.id] = name
                 logger.info(f"[Watcher] Tracking persona bot: {name} → {client.user.id}")
 
-        # Load persisted watch state and prune inaccessible channels
+        # One-time setup only: on_ready re-fires whenever discord.py opens a
+        # new session (resume failure, extended outage). Re-running the steps
+        # below on reconnect could wipe watch state while a guild is briefly
+        # unavailable, and would re-sync slash commands needlessly.
+        if self._ready_initialized:
+            logger.info("[Watcher] Reconnected — keeping existing watch state")
+            return
+        self._ready_initialized = True
+
+        # Load persisted watch state. Channels that no longer resolve are kept
+        # (a stale ID never matches a message, so it's harmless) rather than
+        # pruned — pruning here destroyed the watch list when a guild was
+        # merely unavailable at READY time.
         self._load_watch_state()
-        stale = {cid for cid in self._watched_channel_ids if self.get_channel(cid) is None}
-        if stale:
-            self._watched_channel_ids -= stale
-            for cid in stale:
-                self._channel_defaults.pop(cid, None)
-            self._save_watch_state()
-            logger.warning(f"[Watcher] Pruned {len(stale)} inaccessible channels from watch list")
+        unresolved = [
+            cid for cid in self._watched_channel_ids if self.get_channel(cid) is None
+        ]
+        if unresolved:
+            logger.warning(
+                f"[Watcher] {len(unresolved)} watched channel(s) not currently "
+                f"resolvable (guild unavailable or channel deleted): {unresolved}"
+            )
 
         # Resolve config channel names → IDs (first time setup)
         if self._config_channel_names and not self._watched_channel_ids:
@@ -331,6 +409,39 @@ class Watcher(discord.Client):
         logger.info(
             f"[Watcher] Monitoring: {', '.join(watched_names) if watched_names else 'no channels (use /watch)'}"
         )
+        self._setup_done.set()
+
+    async def announce_system(self, text: str, wait_seconds: float = 0) -> bool:
+        """Send a small status line to every watched channel, as the Watcher.
+
+        Used for process-startup events (e.g. the reflection cycle). Waits up
+        to wait_seconds for first-ready setup so the watched-channel list is
+        loaded; returns False if setup didn't finish in time or nothing was
+        sent. Failure-soft — never raises.
+        """
+        if wait_seconds:
+            try:
+                await asyncio.wait_for(self._setup_done.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[Watcher] Announce skipped — setup not finished "
+                    f"within {wait_seconds}s: {text!r}"
+                )
+                return False
+        elif not self._setup_done.is_set():
+            return False
+
+        sent = False
+        for cid in list(self._watched_channel_ids):
+            channel = self.get_channel(cid)
+            if channel is None:
+                continue
+            try:
+                await channel.send(text)
+                sent = True
+            except discord.HTTPException as e:
+                logger.warning(f"[Watcher] Announce failed in channel {cid}: {e}")
+        return sent
 
     async def on_message(self, message: discord.Message):
         """
@@ -378,9 +489,53 @@ class Watcher(discord.Client):
         if girls_triggered:
             cleaned_input = self._strip_role_mention(cleaned_input, message)
 
+        # ── Abuse guards ─────────────────────────────────────────
+        # Every trigger past this point is a paid LLM call. On a public
+        # server, throttle per-user and cap the per-channel queue so a spam
+        # loop can't stack up unbounded calls behind the lock.
+        now = time.monotonic()
+        last = self._last_trigger_at.get(message.author.id)
+        if last is not None and (now - last) < self._user_cooldown_seconds:
+            logger.info(
+                f"[Watcher] #{message.channel.name} | throttled (cooldown) | "
+                f"{message.author.display_name}"
+            )
+            await self._react_throttled(message)
+            return
+
+        channel_lock = self._channel_locks.setdefault(
+            message.channel.id, asyncio.Lock()
+        )
+        if (
+            channel_lock.locked()
+            and self._queued_count.get(message.channel.id, 0)
+            >= self._max_queued_per_channel
+        ):
+            logger.info(
+                f"[Watcher] #{message.channel.name} | dropped (queue full) | "
+                f"{message.author.display_name}"
+            )
+            await self._react_throttled(message)
+            return
+
+        self._last_trigger_at[message.author.id] = now
+
         # ── Get channel lock ─────────────────────────────────────
-        async with self._channel_locks.setdefault(message.channel.id, asyncio.Lock()):
-            await self._process_message(message, cleaned_input, forced_personas)
+        self._queued_count[message.channel.id] = (
+            self._queued_count.get(message.channel.id, 0) + 1
+        )
+        try:
+            async with channel_lock:
+                await self._process_message(message, cleaned_input, forced_personas)
+        finally:
+            self._queued_count[message.channel.id] -= 1
+
+    async def _react_throttled(self, message: discord.Message) -> None:
+        """Mark a dropped message with 🕐 so the user knows it wasn't missed."""
+        try:
+            await message.add_reaction("\U0001f552")
+        except discord.HTTPException:
+            pass
 
     async def _process_message(
         self,
@@ -564,28 +719,20 @@ class Watcher(discord.Client):
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning(f"[Watcher] Failed to load watch state: {e}")
 
-    def update_persona_bot_ids(self) -> None:
-        """Refresh persona bot IDs (call after all bots are connected)."""
+    def _persona_id_map(self) -> Dict[int, str]:
+        """ID → persona name map for mention resolution.
+
+        Refreshes the cache from live client.user on every call: all six bots
+        connect concurrently, so personas that ready *after* the watcher must
+        still get picked up, or their pings silently stop resolving. The cache
+        keeps a persona resolvable while it's mid-reconnect (client.user is
+        None during a reconnect).
+        """
         for name, client in self._persona_clients.items():
             if client.user:
                 self._persona_bot_ids.add(client.user.id)
                 self._persona_id_to_name[client.user.id] = name
-
-    def _persona_id_map(self) -> Dict[int, str]:
-        """ID → persona name map for mention resolution.
-
-        Prefers the cached map (populated on_ready) so a ping still resolves
-        even if a persona client is momentarily mid-reconnect. Falls back to
-        live client.user if the cache is empty (e.g. a message arrives before
-        on_ready has run).
-        """
-        if self._persona_id_to_name:
-            return self._persona_id_to_name
-        return {
-            client.user.id: name
-            for name, client in self._persona_clients.items()
-            if client.user
-        }
+        return self._persona_id_to_name
 
     def _resolve_mentions(self, text: str) -> tuple[str, List[str]]:
         """

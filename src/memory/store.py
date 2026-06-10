@@ -417,8 +417,11 @@ class MemoryStore:
         exclude_ids = exclude_ids or set()
         vec_data = _serialize_embedding(query_embedding)
 
-        # Fetch more than top_k from vector search to allow for filtering
-        fetch_k = top_k * 3 if persona_filter else top_k + 5
+        # Fetch more than top_k from vector search to allow for filtering.
+        # With a persona filter the over-fetch must cover the fan-out: each
+        # user message creates one near-identical exchange per responding
+        # persona (up to 5), so ~4/5 of the nearest vectors get filtered out.
+        fetch_k = top_k * 6 if persona_filter else top_k + 5
 
         # Vector search
         vec_results = self._conn.execute(
@@ -443,11 +446,15 @@ class MemoryStore:
             fts_query = self._sanitize_fts_query(query_text)
             if fts_query:
                 try:
+                    # ORDER BY rank (BM25) — without it FTS5 returns matches
+                    # in rowid (insertion) order, so RRF would rank keyword
+                    # hits by age instead of relevance.
                     fts_rows = self._conn.execute(
                         """SELECT e.id
                            FROM exchanges_fts f
                            JOIN exchanges e ON e.rowid = f.rowid
                            WHERE exchanges_fts MATCH ?
+                           ORDER BY rank
                            LIMIT ?""",
                         (fts_query, fetch_k),
                     ).fetchall()
@@ -529,11 +536,13 @@ class MemoryStore:
             fts_query = self._sanitize_fts_query(query_text)
             if fts_query:
                 try:
+                    # ORDER BY rank — same reason as the exchanges FTS query.
                     fts_rows = self._conn.execute(
                         """SELECT r.id
                            FROM reflections_fts f
                            JOIN reflections r ON r.rowid = f.rowid
                            WHERE reflections_fts MATCH ?
+                           ORDER BY rank
                            LIMIT ?""",
                         (fts_query, fetch_k),
                     ).fetchall()

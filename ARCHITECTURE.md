@@ -62,7 +62,7 @@ Vector similarity and keyword matches are each ranked, then fused with Reciproca
 
 ### Daily reflections
 
-One level of summarization. For a given date, all of a persona's unreflected exchanges are summarized by a cheaper model into a first-person diary entry, embedded, and stored; the source exchanges are marked `reflected`. Because the bot isn't guaranteed to be running at midnight, reflections are **not** on a timer — they run as a **startup catch-up**: on boot, any past date with unreflected exchanges is backfilled (today is left alone). Restarting the bot is the trigger.
+One level of summarization. For a given date, all of a persona's unreflected exchanges are summarized by a cheaper model into a first-person diary entry, embedded, and stored; the source exchanges are marked `reflected`. Because the bot isn't guaranteed to be running at midnight, reflections are **not** on a timer — they run as a **startup catch-up**: on boot, any past date with unreflected exchanges is backfilled (today is left alone). Restarting the bot is the trigger. When there's work to do, the Watcher announces the cycle's start and finish in watched channels (once per process — reconnects don't re-announce); the cycle shares the embedding model and CPU with live messages, so responses are slower while it runs, but nothing conflicts at the data level (it only touches past dates).
 
 ## Subsystems (`src/`)
 
@@ -76,7 +76,7 @@ One level of summarization. For a given date, all of a persona's unreflected exc
 | Context | `context/unified_manager.py`, `context/formatters.py` | Parallel retrieval for all personas; memory/relationship → prompt strings |
 | Conversation | `conversation/buffer.py` | Per-channel sliding window with JSON persistence + archive |
 | Discord | `discord_bot/runner.py`, `discord_bot/watcher.py`, `discord_bot/persona_client.py` | Process entry point, coordinator, per-persona bots |
-| Utils | `utils/config.py`, `utils/paths.py`, `utils/io.py`, `utils/token_counter.py` | Config merge + env, project root, atomic I/O, token counting |
+| Utils | `utils/config.py`, `utils/paths.py`, `utils/io.py` | Config merge + env, project root, atomic I/O |
 
 ## Conversation Buffer
 
@@ -97,6 +97,8 @@ Other personas' prior messages are folded into history as attributed `user` turn
 - `context/manager.py` — legacy per-persona context manager, superseded by `unified_manager.py`.
 - Relationship tracking — `relationships` table, `save_relationship`, and the relational primer exist but nothing writes relationships yet. Slated for a future build-out; harmless until then.
 - Session-state methods on `StateManager` — present but not wired into the unified pipeline.
+- `utils/token_counter.py` — token counting helpers, zero callers.
+- `format_affective_primer()` in `context/formatters.py` — leftover from the deprecated affective subsystem.
 
 ## What's Next
 

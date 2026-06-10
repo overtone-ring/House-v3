@@ -67,14 +67,20 @@ def _load_config() -> dict:
     return config
 
 
-async def _run_reflection_catchup(config: dict) -> None:
+async def _run_reflection_catchup(config: dict, watcher=None) -> None:
     """Backfill any missed daily reflections on startup.
 
     Because the bot isn't guaranteed to be running at midnight, reflections
     can't rely on a timer. Instead, on every startup we look for exchanges
     from past dates that were never reflected on, and generate those summaries
     now. Today's exchanges are left alone (the day may still be in progress).
+
+    When there's work to do, the cycle announces itself in watched channels —
+    it competes with live messages for the embedding model and CPU, so
+    responses are slower until it finishes. This task runs once per process,
+    so reconnects never re-announce.
     """
+    announced = False
     try:
         from datetime import datetime, timezone
         from ..memory.store import get_store
@@ -100,12 +106,35 @@ async def _run_reflection_catchup(config: dict) -> None:
         await service.initialize()
         logger.info(f"Reflection catch-up: backfilling {len(past_dates)} date(s): {past_dates}")
 
+        if watcher is not None:
+            days = f"{len(past_dates)} past day" + ("s" if len(past_dates) != 1 else "")
+            announced = await watcher.announce_system(
+                f"🪞 The House is reflecting on {days} — "
+                f"responses may be slower until it finishes.",
+                wait_seconds=120,
+            )
+
+        total_written = 0
         for date in past_dates:
             results = await service.run_for_all_personas(date=date)
             written = sum(1 for r in results.values() if r.get("reflection_id"))
+            total_written += written
             logger.info(f"Reflection catch-up {date}: {written} reflection(s) written")
+
+        if announced:
+            await watcher.announce_system(
+                f"🪞 Reflection cycle finished — "
+                f"{total_written} reflection(s) written."
+            )
     except Exception as e:
         logger.error(f"Reflection catch-up failed: {e}", exc_info=True)
+        if announced:
+            try:
+                await watcher.announce_system(
+                    "🪞 Reflection cycle stopped on an error — check the logs."
+                )
+            except Exception:
+                pass
 
 
 async def run_house(env_path: Optional[str] = None) -> None:
@@ -217,8 +246,9 @@ async def run_house(env_path: Optional[str] = None) -> None:
     )
 
     # Backfill any missed daily reflections in the background so it doesn't
-    # delay the bot fleet coming online.
-    catchup_task = asyncio.create_task(_run_reflection_catchup(config))
+    # delay the bot fleet coming online. The watcher is passed so the cycle
+    # can announce its start/finish in watched channels.
+    catchup_task = asyncio.create_task(_run_reflection_catchup(config, watcher))
     catchup_task.add_done_callback(
         lambda t: t.cancelled() or (
             t.exception() and logger.error(f"Reflection catch-up task error: {t.exception()}")

@@ -146,8 +146,16 @@ class TTSService:
 
         # Write to file
         if output_path is None:
+            import uuid
+
+            # uuid, not id(text): CPython reuses freed object addresses, so
+            # id() can collide across concurrent syntheses — one task would
+            # overwrite (or unlink) the file another is still uploading.
             self._output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = self._output_dir / f"tts_{persona}_{id(text) & 0xFFFFFF:06x}.{self._output_format}"
+            output_path = (
+                self._output_dir
+                / f"tts_{persona}_{uuid.uuid4().hex[:12]}.{self._output_format}"
+            )
 
         self._write_audio(full_audio, output_path)
 

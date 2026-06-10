@@ -8,12 +8,14 @@ Fallback chain:
     1. Direct json.loads()
     2. Extract JSON from ```json ... ``` blocks
     3. Find first { ... } in text
-    4. Treat entire response as default persona (graceful degradation)
+    4. Non-JSON text: treat entire response as default persona
+       (graceful degradation for "model wrote prose instead of JSON")
 
 Validates:
     - Keys must be valid persona names
     - Values must be str or null
-    - At least one non-null response required
+    - Valid JSON that yields no usable response (all-null, wrong keys,
+      non-string values) is treated as silence — never posted raw
 """
 
 import json
@@ -55,6 +57,15 @@ def parse_house_response(
         result = _validate_and_clean(parsed, valid_personas)
         if result:
             return result
+        # The model produced real JSON, but it validated to nothing usable
+        # (all-null, wrong keys, or non-string values). The plain-text
+        # fallback below would post raw JSON braces to Discord — silence is
+        # the lesser evil. Log the full output so it can be diagnosed.
+        logger.warning(
+            "Model returned JSON with no usable persona responses — "
+            f"treating as silence. Raw output: {raw_text[:500]!r}"
+        )
+        return {p: None for p in valid_personas}
 
     # All JSON parsing failed — treat entire text as default persona response
     logger.warning(
@@ -162,8 +173,13 @@ def _validate_and_clean(
                 cleaned = truncated
             result[key_lower] = cleaned if cleaned else None
         else:
-            # Coerce non-string to string
-            result[key_lower] = str(value).strip() or None
+            # Dict/list/number values are malformed output, not usable text —
+            # str() would post a Python repr into chat. Treat as silent.
+            logger.warning(
+                f"Non-string value for {key_lower} "
+                f"({type(value).__name__}), discarding"
+            )
+            result[key_lower] = None
 
     # Ensure all valid personas are represented
     for persona in valid_personas:

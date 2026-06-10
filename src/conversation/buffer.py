@@ -147,6 +147,7 @@ class ConversationBuffer:
     def get_history_for_unified_llm(
         self,
         limit: Optional[int] = None,
+        exclude_current: bool = False,
     ) -> List[Dict]:
         """
         Get conversation history for the unified multi-persona model.
@@ -155,10 +156,16 @@ class ConversationBuffer:
         the model knows which persona said what. Since the unified model
         IS all personas, every assistant turn is role: "assistant".
 
+        exclude_current drops the most recent user turn — for callers that
+        pass the current message separately as the prompt, so the model
+        doesn't see it twice.
+
         Returns:
             List of {"role": str, "content": str} dicts.
         """
         turns = list(self._turns)
+        if exclude_current and turns and turns[-1].role == "user":
+            turns = turns[:-1]
         if limit:
             turns = turns[-limit:]
 

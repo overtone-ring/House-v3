@@ -156,10 +156,14 @@ class UnifiedOrchestrator:
         )
 
         # Step 2: Build conversation history
+        # exclude_current: the watcher adds the user's message to the buffer
+        # before calling us, and we already pass it separately as the prompt —
+        # without this the model sees the same message twice every turn.
         conversation_history = None
         if conversation_buffer:
             conversation_history = conversation_buffer.get_history_for_unified_llm(
-                limit=self.config.get("conversation", {}).get("max_turns", 50)
+                limit=self.config.get("conversation", {}).get("max_turns", 50),
+                exclude_current=True,
             )
 
         # Step 3: Build contextual primer from unified context
@@ -204,13 +208,42 @@ class UnifiedOrchestrator:
             responses = {p: None for p in self.personas}
             responses[self._fallback_persona] = response_text.strip() or None
 
+        # Visibility: who the model actually chose to speak as, before any
+        # forced-persona filtering. This is the ground truth of the generation.
+        spoke_before = [p for p, r in responses.items() if r]
+        logger.info(
+            f"Model produced responses for: {spoke_before or 'NONE'}"
+            + (f" | forced={sorted(forced_personas)}" if forced_personas else "")
+        )
+
         # Hard guarantee: when specific personas were addressed, silence anyone
         # else the model may have let speak anyway.
         if forced_personas:
-            responses = {
+            filtered = {
                 p: (r if p in forced_personas else None)
                 for p, r in responses.items()
             }
+            # Never discard a real generation silently. If the model produced
+            # output but spoke only as wrong/unaddressed persona(s), the filter
+            # just blanked everything — the silent-dead-air bug. Reroute the
+            # discarded text to an addressed persona instead of going quiet.
+            # This also covers error placeholders, which always land on the
+            # fallback persona and would otherwise vanish here.
+            if spoke_before and not any(filtered.values()):
+                target = sorted(forced_personas)[0]
+                source = (
+                    self._fallback_persona
+                    if responses.get(self._fallback_persona)
+                    else spoke_before[0]
+                )
+                logger.warning(
+                    "Forced-persona filter would discard the ENTIRE generation: "
+                    f"model spoke as {spoke_before} but only {sorted(forced_personas)} "
+                    f"{'was' if len(forced_personas) == 1 else 'were'} addressed. "
+                    f"Rerouting {source}'s text to {target} instead of dead air."
+                )
+                filtered[target] = responses[source]
+            responses = filtered
 
         # Step 6: Post-process (async, don't block response delivery)
         task = asyncio.create_task(

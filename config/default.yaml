@@ -98,6 +98,12 @@ discord:
   # (@Girls) summons the whole house; pinging an individual persona bot
   # summons only that persona. Messages with neither ping are ignored.
   girls_role: Girls
+  # Abuse guards for public servers. Each trigger is a paid LLM call:
+  # a user must wait this many seconds between triggers, and at most this
+  # many messages may queue behind a channel's processing lock. Throttled
+  # messages get a 🕐 reaction instead of a response.
+  user_cooldown_seconds: 8
+  max_queued_per_channel: 3
 
 # ── Logging ───────────────────────────────────────────────────────────
 logging:

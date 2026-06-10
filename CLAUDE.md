@@ -10,8 +10,10 @@ Locke (Doug) is a truck driver with ADHD who built this system through vibe codi
 
 ```bash
 source .venv/bin/activate
-python -m src.discord_bot.runner
+python -m src.discord_bot
 ```
+
+(`python -m src.discord_bot.runner` also works — same entry point.)
 
 Requires `.env` with `OPENROUTER_API_KEY` and `DISCORD_TOKEN_WATCHER`, `DISCORD_TOKEN_ELVIRA`, `DISCORD_TOKEN_FRANK`, `DISCORD_TOKEN_ZAGNA`, `DISCORD_TOKEN_VIRELINE`, `DISCORD_TOKEN_ELLIE`.
 
@@ -26,6 +28,10 @@ User message → Watcher bot → UnifiedOrchestrator.process_message()
   → Fire-and-forget post-processing (record to memory, update engagement)
 ```
 
+Responses are gated behind explicit pings: an `@Girls` role ping summons the whole house, a persona ping (or a reply to a persona message) summons that persona. Unpinged messages in watched channels are ignored.
+
+See `ARCHITECTURE.md` for the full design write-up (request flow, memory model, process model, dead code inventory).
+
 ## Key files
 
 | File | What it does |
@@ -36,13 +42,13 @@ User message → Watcher bot → UnifiedOrchestrator.process_message()
 | `src/memory/models.py` | Dataclasses: Exchange, DailyReflection, UserRelationship, SessionState |
 | `src/services/memory_service.py` | Memory API — `add_exchange()`, `search_memory()` (hybrid search) |
 | `src/services/embedding_service.py` | ONNX embeddings — nomic-embed-text-v1.5, 768 dimensions, singleton |
-| `src/services/state_manager.py` | Per-persona affective state with time-based decay. File-based JSON |
+| `src/services/state_manager.py` | Engagement counts + session metadata. File-based JSON, atomic writes |
 | `src/context/unified_manager.py` | Parallel context retrieval for all personas at once |
-| `src/context/formatters.py` | Formats memories + affective state as natural language (no raw numbers) |
+| `src/context/formatters.py` | Formats memories + user context as natural language for the prompt |
 | `src/conversation/buffer.py` | Sliding-window history per channel. Session IDs use channel ID, not name |
 | `src/discord_bot/runner.py` | Entry point — loads config, inits orchestrator, starts 6 bots |
-| `src/discord_bot/watcher.py` | Coordinator bot — listens, dispatches, slash commands |
-| `src/discord_bot/persona_client.py` | Individual persona bot — sends messages, handles TTS reactions |
+| `src/discord_bot/watcher.py` | Coordinator bot — listens, ping-gates, dispatches, slash commands |
+| `src/discord_bot/persona_client.py` | Individual persona bot — sends messages, handles 🔊 TTS reactions |
 | `src/providers/openrouter_provider.py` | OpenRouter via OpenAI-compatible API. Supports json_mode, plugins |
 | `src/providers/registry.py` | Provider factory — `create_provider_from_config()` |
 | `config/default.yaml` | All configuration. Override with `config/local.yaml` (.gitignored) |
@@ -65,21 +71,28 @@ Single SQLite database (`data/memory.db`) shared across all personas.
 provider:              # Primary LLM (model, temperature, max_tokens)
 reflection_provider:   # Cheaper model for reflections/query inference
 personas:              # List of persona names
+default_persona:       # Fallback persona for single-persona mode
 unified:               # system_prompt_file, json_mode, fallback_persona
-memory:                # data_dir, embedding config, search params
-conversation:          # max_turns, max_chars
-affective:             # base_decay_rate, per-dimension decay config
-tts:                   # provider, voice_map per persona
-discord:               # channels (initial watch list)
+memory:                # data_dir, embedding config, search params, reflection settings
+conversation:          # max_turns (LLM window)
+context:               # (currently unread — UnifiedContextManager hardcodes its limits)
+query_inference:       # enabled, temperature
+tts:                   # provider, lang_code, voice_map per persona
+discord:               # channels (initial watch list), girls_role, abuse guards
+                       #   (user_cooldown_seconds, max_queued_per_channel)
+logging:               # log_dir (level/wire_tap currently unread)
 ```
+
+Known-dead keys (present in YAML but not read by any code): `memory.search.min_similarity`, `memory.search.recency_weight`, `memory.embedding_dimension`, `context.*`, `conversation.max_chars`, `conversation.persistence`, `logging.level`, `logging.wire_tap`. `memory.reflection.max_exchanges_per_reflection` is read from the wrong config level and only works because the code default matches.
 
 ## Important design decisions
 
 - **Session IDs use channel ID** (`discord_{channel_id}`), not channel name — prevents cross-server buffer collision
-- **Affective state uses natural language** in prompts, not raw floats — research shows numbers bias models toward clinical output
+- **Ping-gating** — the House only speaks when summoned (`@Girls`, persona ping, or reply to a persona). Built for deployment on a public server
+- **Affective state was deprecated** — an earlier subsystem (emotional dimensions with time decay) was never written to in the unified pipeline and never reached a prompt. `StateManager` now tracks engagement + sessions only. Leftover: `format_affective_primer()` in `formatters.py` is unused
 - **Response parser** truncates at 2000 chars (Discord limit) and detects repetition loops (DeepSeek v3.2 degenerated once)
 - **System prompt is loaded once at startup** and cached — restart the bot to pick up prompt changes
-- **Post-processing is fire-and-forget** — responses dispatch immediately, memory recording happens async
+- **Post-processing is fire-and-forget** — responses dispatch immediately, memory recording happens async (tasks held in `_pending_tasks`, drained on shutdown)
 - **Conversation buffer** tags user turns with `[speaker_name]:` and assistant turns with `[persona_name]:` for multi-user support
 - **Provider is swappable** — change `provider.model` in config. Current primary: Gemma 4 31B (validated — distinct persona voices, ~$0.0007/msg). Also tested: Qwen3-235B (stable, now reflection-only), DeepSeek v3.2 (degenerated)
 
@@ -93,6 +106,8 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 - **Vireline** — Clinical strategist. Precise, structural, no hedging. "Confirmed." "Acknowledged."
 - **Ellie** — Quiet presence. Minimal, tender, grief-linked. Speaks in line breaks.
 
+The per-persona files in `data/personas/*.md` are kept for reference; the live prompt is `unified_house.md` only.
+
 ## Slash commands
 
 `/watch`, `/unwatch`, `/channels`, `/status`, `/set_default`, `/clear_default`, `/reset_buffer`
@@ -101,29 +116,29 @@ Five voices, one model call. The unified system prompt (`data/personas/unified_h
 
 | File | What it does |
 |------|-------------|
-| `src/persona/loader.py` | Loads persona definitions from markdown files |
-| `src/persona/assembler.py` | Assembles persona prompt components |
-| `src/persona/memory_instructions.py` | Persona-specific memory instruction templates |
-| `src/context/manager.py` | Legacy per-persona context manager (unused, replaced by unified_manager) |
-| `src/providers/base.py` | Abstract base class for LLM providers |
-| `src/services/daily_reflection_service.py` | Generates periodic persona reflections using cheaper model |
+| `src/context/manager.py` | Legacy per-persona context manager — dead code, only imported by `context/__init__.py` |
+| `src/providers/base.py` | Abstract base class for LLM providers, retry + error classification |
+| `src/services/daily_reflection_service.py` | Generates daily persona reflections using cheaper model (startup catch-up, not a timer) |
 | `src/services/query_inference_service.py` | Infers embedding search queries from conversation context |
 | `src/services/tts_service.py` | Kokoro TTS synthesis for voice reactions |
-| `src/utils/config.py` | YAML config loading and merging |
-| `src/utils/io.py` | I/O utilities |
+| `src/utils/config.py` | YAML config loading and merging (`default.yaml` → `local.yaml` → `HOUSE_*` env) |
+| `src/utils/io.py` | Atomic JSON read/write |
 | `src/utils/paths.py` | Path resolution helpers |
-| `src/utils/token_counter.py` | Token counting for context window management |
-| `scripts/preflight.py` | Pre-run environment verification (packages, config, tokens, model) |
-| `scripts/reset.py` | Data management — `nuke` (full reset) or `today` (remove today's data) |
+| `src/utils/token_counter.py` | Token counting — currently unused (zero callers) |
 
 ## Scripts
 
 ```bash
-python scripts/preflight.py          # Verify setup before first run
-python scripts/reset.py today        # Remove today's exchanges, reflections, buffers, state
-python scripts/reset.py nuke         # Full factory reset (deletes all data + logs)
-python scripts/reset.py nuke -y      # Skip confirmation
+python scripts/preflight.py            # Verify setup before first run
+python scripts/model_smoke.py [model]  # Hit a model through the real prompt+parser; latency/cost report
+python scripts/reset.py today          # Remove today's DB rows + ALL conversation buffers + ALL engagement state
+python scripts/reset.py nuke           # Full factory reset (deletes all data + logs)
+python scripts/reset.py nuke -y        # Skip confirmation
+python scripts/test_openrouter_models.py  # Older model comparison harness (voice/latency/rate limits)
+python scripts/migrate_to_sqlite.py    # One-time v2 JSONL → SQLite migration (historical)
 ```
+
+Note: `reset.py today` deletes more than its name suggests — all conversation buffers and all engagement state, not just today's (the confirmation prompt says so). Paths are anchored to the project root, so it's safe to run from anywhere.
 
 ## Dependencies (non-obvious)
 
