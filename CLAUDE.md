@@ -80,6 +80,8 @@ query_inference:       # enabled, temperature
 tts:                   # provider, lang_code, voice_map per persona
 discord:               # channels (initial watch list), girls_role, abuse guards
                        #   (user_cooldown_seconds, max_queued_per_channel)
+dashboard:             # enabled, host, port — in-process web UI (default
+                       #   http://0.0.0.0:8765, reachable on the local network)
 logging:               # level, log_dir, wire_tap, retention_days — house.log
                        #   mirrors the console; wire.jsonl records full API
                        #   payloads, raw model output, memory-search results,
@@ -129,7 +131,8 @@ The per-persona files in `data/personas/*.md` are kept for reference; the live p
 | `src/services/tts_service.py` | Kokoro TTS synthesis for voice reactions |
 | `src/utils/config.py` | YAML config loading and merging (`default.yaml` → `local.yaml` → `HOUSE_*` env) |
 | `src/utils/io.py` | Atomic JSON read/write |
-| `src/utils/wire_log.py` | Rotating file logs — house.log (console mirror) + wire.jsonl (`wire_record()` events: llm_call, llm_error, memory_search, scene) |
+| `src/utils/wire_log.py` | Rotating file logs — house.log (console mirror) + wire.jsonl (`wire_record()` events: llm_call, llm_error, memory_search, scene; correlated per message via `new_request_id()`) |
+| `src/dashboard/server.py` | In-process web dashboard (aiohttp) — live queues/buffers, wire-log exchange browser, stats from memory.db, user activity, health. UI in `dashboard/static/index.html` |
 | `src/utils/paths.py` | Path resolution helpers |
 | `src/utils/token_counter.py` | Token counting — currently unused (zero callers) |
 

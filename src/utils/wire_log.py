@@ -18,8 +18,10 @@ wire_record() is thread-safe (the logging module locks internally) and
 never raises — a logging failure must never take down a live response.
 """
 
+import contextvars
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -28,6 +30,22 @@ from typing import Any
 _wire_logger = logging.getLogger("house.wire")
 _wire_logger.propagate = False  # JSON lines stay out of console/house.log
 _wire_enabled = False
+
+# Correlates the events of one pipeline run (memory_search, llm_call,
+# scene) so a log viewer can group them. Set once per incoming message;
+# contextvars propagate through asyncio.to_thread, so the provider call
+# inherits it without plumbing.
+_request_id: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "wire_request_id", default=""
+)
+
+
+def new_request_id() -> str:
+    """Start a new correlation scope. Returns the id (also auto-attached
+    to every wire_record until the next call)."""
+    rid = uuid.uuid4().hex[:12]
+    _request_id.set(rid)
+    return rid
 
 LOG_FORMAT = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
 
@@ -78,6 +96,9 @@ def wire_record(event: str, **fields: Any) -> None:
         return
     try:
         record = {"ts": datetime.now(timezone.utc).isoformat(), "event": event}
+        rid = _request_id.get()
+        if rid:
+            record["request_id"] = rid
         record.update(fields)
         _wire_logger.info(json.dumps(record, ensure_ascii=False, default=str))
     except Exception:

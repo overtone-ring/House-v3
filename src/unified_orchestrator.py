@@ -41,7 +41,7 @@ from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
 from .response_parser import parse_house_turns
-from .utils.wire_log import wire_record
+from .utils.wire_log import wire_record, new_request_id
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,10 @@ class UnifiedOrchestrator:
             Personas may appear more than once (back-and-forth). An empty
             list means the House stays silent.
         """
+        # One correlation id for this message's wire events (memory_search,
+        # llm_call, scene) — the dashboard groups them by it.
+        new_request_id()
+
         # Step 1: Retrieve unified context
         recent_context = None
         if conversation_buffer:
@@ -263,6 +267,7 @@ class UnifiedOrchestrator:
         wire_record(
             "scene",
             session_id=session_id,
+            user_id=user_id,
             user_input=user_input,
             forced_personas=sorted(forced_personas) if forced_personas else None,
             model_spoke=spoke_before,

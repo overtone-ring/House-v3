@@ -249,6 +249,10 @@ async def run_house(env_path: Optional[str] = None) -> None:
         )
     )
 
+    # Dashboard (in-process web UI — it needs the live watcher state)
+    from ..dashboard.server import start_dashboard
+    dashboard = await start_dashboard(config, watcher=watcher, house=house)
+
     # Backfill any missed daily reflections in the background so it doesn't
     # delay the bot fleet coming online. The watcher is passed so the cycle
     # can announce its start/finish in watched channels.
@@ -266,6 +270,8 @@ async def run_house(env_path: Optional[str] = None) -> None:
         logger.info("Shutting down bot fleet...")
     finally:
         # Graceful shutdown
+        if dashboard:
+            await dashboard.stop()
         shutdown_tasks = []
         for name, client in persona_clients.items():
             if not client.is_closed():

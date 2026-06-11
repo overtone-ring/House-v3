@@ -105,6 +105,15 @@ discord:
   user_cooldown_seconds: 8
   max_queued_per_channel: 3
 
+# ── Dashboard ─────────────────────────────────────────────────────────
+# In-process web UI: live queue/buffers, exchange log browser, stats,
+# users, health. host 0.0.0.0 = reachable from devices on your network
+# (read-only); use 127.0.0.1 to keep it on this machine only.
+dashboard:
+  enabled: true
+  host: 0.0.0.0
+  port: 8765
+
 # ── Logging ───────────────────────────────────────────────────────────
 # house.log mirrors the console; wire.jsonl records full API payloads,
 # raw model output, memory-search results, and parsed scenes. Both
