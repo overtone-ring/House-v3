@@ -254,6 +254,10 @@ class OpenRouterProvider(BaseProvider):
         """Classify OpenRouter/OpenAI errors."""
         error_str = str(error).lower()
 
+        # Out of credits (OpenRouter returns 402 with "Insufficient credits")
+        if any(p in error_str for p in ["402", "insufficient credits", "payment required"]):
+            return ErrorCategory.INSUFFICIENT_CREDITS
+
         # Rate limiting
         if any(p in error_str for p in ["rate_limit", "429", "too many requests", "quota"]):
             return ErrorCategory.RATE_LIMIT

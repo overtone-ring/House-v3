@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class ErrorCategory(Enum):
     """Classifies API errors for retry/routing decisions."""
     RATE_LIMIT = "rate_limit"
+    INSUFFICIENT_CREDITS = "insufficient_credits"
     CONTENT_FILTERED = "content_filtered"
     TIMEOUT = "timeout"
     SERVER_ERROR = "server_error"

@@ -21,7 +21,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .providers import create_provider_from_config
-from .providers.base import BaseProvider
+from .providers.base import BaseProvider, ErrorCategory
+
+
+class HouseUnavailableError(Exception):
+    """The provider can't serve requests right now (rate limit / credits).
+
+    Raised instead of degrading to a placeholder response so the Discord
+    layer can tell users what's actually wrong.
+    """
+
+    def __init__(self, category: ErrorCategory):
+        self.category = category
+        super().__init__(f"House unavailable: {category.value}")
 from .conversation.buffer import ConversationBuffer
 from .context.unified_manager import UnifiedContextManager
 from .context.formatters import format_unified_context
@@ -279,6 +291,13 @@ class UnifiedOrchestrator:
             )
             return result.text
         except Exception as e:
+            # Rate limits (post-retry) and exhausted credits get surfaced to
+            # Discord so users know why the House went quiet — everything
+            # else degrades to the parser's placeholder path as before.
+            category = self._provider.classify_error(e)
+            if category in (ErrorCategory.RATE_LIMIT, ErrorCategory.INSUFFICIENT_CREDITS):
+                logger.error(f"Unified generation unavailable ({category.value}): {e}")
+                raise HouseUnavailableError(category) from e
             logger.error(f"Unified generation failed: {e}", exc_info=True)
             return ""
 

@@ -34,6 +34,8 @@ import discord
 from discord import app_commands
 
 from ..conversation.buffer import ConversationBuffer
+from ..providers.base import ErrorCategory
+from ..unified_orchestrator import HouseUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -588,6 +590,28 @@ class Watcher(discord.Client):
                 conversation_buffer=buffer,
                 forced_personas=forced_personas,
             )
+        except HouseUnavailableError as e:
+            # Say WHY the House went quiet so users can react (and tell
+            # Locke when the credits run dry) instead of assuming it broke.
+            if e.category is ErrorCategory.INSUFFICIENT_CREDITS:
+                notice = (
+                    "⚠️ The House is out of model credits — "
+                    "someone let Locke know."
+                )
+            else:  # rate limit, retries exhausted
+                notice = (
+                    "⚠️ The model provider is rate-limiting the House — "
+                    "give it a minute and ping again."
+                )
+            try:
+                await message.channel.send(notice)
+            except discord.HTTPException:
+                pass
+            try:
+                await message.remove_reaction("\U0001f9e0", self.user)
+            except discord.HTTPException:
+                pass
+            return
         except Exception as e:
             logger.error(f"[Watcher] Orchestration failed: {e}", exc_info=True)
             try:
