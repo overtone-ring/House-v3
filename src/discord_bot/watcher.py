@@ -437,7 +437,17 @@ class Watcher(discord.Client):
         for cid in list(self._watched_channel_ids):
             channel = self.get_channel(cid)
             if channel is None:
-                continue
+                # Cache miss — READY can fire before every guild's channels
+                # are cached (announce runs at startup), so fetch directly
+                # instead of silently skipping the channel.
+                try:
+                    channel = await self.fetch_channel(cid)
+                except Exception as e:
+                    logger.warning(
+                        f"[Watcher] Announce skipped — channel {cid} "
+                        f"unresolvable: {e}"
+                    )
+                    continue
             try:
                 await channel.send(text)
                 sent = True
