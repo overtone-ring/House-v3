@@ -80,10 +80,13 @@ query_inference:       # enabled, temperature
 tts:                   # provider, lang_code, voice_map per persona
 discord:               # channels (initial watch list), girls_role, abuse guards
                        #   (user_cooldown_seconds, max_queued_per_channel)
-logging:               # log_dir (level/wire_tap currently unread)
+logging:               # level, log_dir, wire_tap, retention_days — house.log
+                       #   mirrors the console; wire.jsonl records full API
+                       #   payloads, raw model output, memory-search results,
+                       #   parsed scenes. Midnight rotation, retention_days kept
 ```
 
-Known-dead keys (present in YAML but not read by any code): `memory.search.min_similarity`, `memory.search.recency_weight`, `memory.embedding_dimension`, `context.*`, `conversation.max_chars`, `conversation.persistence`, `logging.level`, `logging.wire_tap`. `memory.reflection.max_exchanges_per_reflection` is read from the wrong config level and only works because the code default matches.
+Known-dead keys (present in YAML but not read by any code): `memory.search.min_similarity`, `memory.search.recency_weight`, `memory.embedding_dimension`, `context.*`, `conversation.max_chars`, `conversation.persistence`. `memory.reflection.max_exchanges_per_reflection` is read from the wrong config level and only works because the code default matches.
 
 ## Important design decisions
 
@@ -126,6 +129,7 @@ The per-persona files in `data/personas/*.md` are kept for reference; the live p
 | `src/services/tts_service.py` | Kokoro TTS synthesis for voice reactions |
 | `src/utils/config.py` | YAML config loading and merging (`default.yaml` → `local.yaml` → `HOUSE_*` env) |
 | `src/utils/io.py` | Atomic JSON read/write |
+| `src/utils/wire_log.py` | Rotating file logs — house.log (console mirror) + wire.jsonl (`wire_record()` events: llm_call, llm_error, memory_search, scene) |
 | `src/utils/paths.py` | Path resolution helpers |
 | `src/utils/token_counter.py` | Token counting — currently unused (zero callers) |
 

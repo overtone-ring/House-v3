@@ -147,6 +147,10 @@ async def run_house(env_path: Optional[str] = None) -> None:
     _load_env(env_path)
     config = _load_config()
 
+    # File logging + wire tap (config-driven, so it can't start earlier)
+    from ..utils.wire_log import setup_logging
+    setup_logging(config)
+
     # ── Validate tokens ──────────────────────────────────────────
     watcher_token = os.environ.get(WATCHER_TOKEN_KEY)
     if not watcher_token:

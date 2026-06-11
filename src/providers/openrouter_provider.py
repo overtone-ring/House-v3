@@ -25,6 +25,8 @@ from .base import (
     ProviderConfig,
     ToolDefinition,
 )
+from ..utils.wire_log import wire_record
+
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -136,6 +138,18 @@ class OpenRouterProvider(BaseProvider):
                     "total_tokens": response.usage.total_tokens,
                 }
 
+            # Wire tap: the exact request payload and the full raw response.
+            try:
+                raw = response.model_dump(mode="json")
+            except Exception:
+                raw = str(response)
+            wire_record(
+                "llm_call",
+                request=payload,
+                response=raw,
+                latency_ms=round(latency),
+            )
+
             return GenerationResult(
                 text=text,
                 raw_response=response,
@@ -148,6 +162,13 @@ class OpenRouterProvider(BaseProvider):
 
         except Exception as e:
             category = self.classify_error(e)
+            wire_record(
+                "llm_error",
+                request=payload,
+                error=str(e),
+                category=category.value,
+                latency_ms=round((time.monotonic() - start) * 1000),
+            )
             if category == ErrorCategory.CONTENT_FILTERED:
                 return GenerationResult(
                     text="[Content filtered - unable to respond to that topic right now.]",

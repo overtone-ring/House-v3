@@ -106,7 +106,11 @@ discord:
   max_queued_per_channel: 3
 
 # ── Logging ───────────────────────────────────────────────────────────
+# house.log mirrors the console; wire.jsonl records full API payloads,
+# raw model output, memory-search results, and parsed scenes. Both
+# rotate at midnight and keep retention_days of history.
 logging:
   level: INFO
-  wire_tap: false       # Log raw API payloads
+  wire_tap: true
   log_dir: ./logs
+  retention_days: 3

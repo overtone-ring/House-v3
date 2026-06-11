@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .formatters import format_relational_primer
+from ..utils.wire_log import wire_record
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,16 @@ class UnifiedContextManager:
                     result["user_context"] = await store.get_relationship(user_id)
             except Exception as e:
                 logger.warning(f"Relationship lookup failed: {e}")
+
+        wire_record(
+            "memory_search",
+            session_id=session_id,
+            raw_query=query,
+            search_query=result["search_query"],
+            skipped=result["search_skipped"],
+            results=result["memories"],
+            user_context=result["user_context"],
+        )
 
         return result
 

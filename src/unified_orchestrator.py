@@ -41,6 +41,7 @@ from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
 from .response_parser import parse_house_turns
+from .utils.wire_log import wire_record
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,18 @@ class UnifiedOrchestrator:
                     {"persona": target, "text": t["text"]} for t in source_turns
                 ]
             turns = filtered
+
+        # Wire tap: the parsed scene as it will actually dispatch. Compared
+        # against the llm_call record, this shows what the parser kept,
+        # dropped, rerouted, or truncated.
+        wire_record(
+            "scene",
+            session_id=session_id,
+            user_input=user_input,
+            forced_personas=sorted(forced_personas) if forced_personas else None,
+            model_spoke=spoke_before,
+            turns=turns,
+        )
 
         # Step 6: Post-process (async, don't block response delivery)
         task = asyncio.create_task(

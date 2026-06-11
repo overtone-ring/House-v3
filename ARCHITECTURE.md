@@ -96,6 +96,10 @@ Other personas' prior messages are folded into history as attributed `user` turn
 
 `utils/config.py` deep-merges `config/default.yaml` then `config/local.yaml`, then applies `HOUSE_*` environment overrides. `local.yaml` is gitignored and is where per-environment values (model, channels, keys) belong. The Discord runner loads config through this same path, so local overrides apply.
 
+## Observability
+
+`utils/wire_log.py` writes two rotating logs under `logging.log_dir` (midnight rotation, `logging.retention_days` kept): `house.log` mirrors everything the console prints, and `wire.jsonl` (when `logging.wire_tap` is on) records one JSON line per pipeline event — `llm_call` (the exact API request payload and full raw model response), `llm_error`, `memory_search` (whether search ran, the inferred query, and every memory returned), and `scene` (the parsed turns as dispatched). Any exchange can be reconstructed after the fact: what was sent, what came back, and what the parser made of it.
+
 ## What's Dead Code (intentionally kept)
 
 - `context/manager.py` — legacy per-persona context manager, superseded by `unified_manager.py`.
