@@ -46,6 +46,9 @@ class Dashboard:
         self._house = house
         self._started_at = time.monotonic()
         self._runner: Optional[web.AppRunner] = None
+        # user_id → current Discord name (None = lookup failed; don't retry
+        # every page load)
+        self._name_cache: Dict[str, Optional[str]] = {}
 
         log_cfg = self._config.get("logging", {})
         self._log_dir = self._resolve(log_cfg.get("log_dir", "./logs"))
@@ -287,6 +290,23 @@ class Dashboard:
             },
         })
 
+    async def _resolve_user_name(self, uid: str) -> Optional[str]:
+        """Current Discord name for a user id — cache first, then the
+        watcher's user cache, then a one-time API fetch."""
+        if uid in self._name_cache:
+            return self._name_cache[uid]
+        name = None
+        try:
+            user = self._watcher.get_user(int(uid))
+            if user is None:
+                user = await self._watcher.fetch_user(int(uid))
+            if user is not None:
+                name = user.display_name
+        except Exception:
+            pass
+        self._name_cache[uid] = name
+        return name
+
     async def _api_users(self, request: web.Request) -> web.Response:
         rows = await asyncio.to_thread(
             self._db_query,
@@ -305,14 +325,27 @@ class Dashboard:
             # One row per persona per message — dedupe to count messages.
             msg_key = f"{session_id}|{user_msg}"
             u = users.setdefault(uid, {"user_id": uid, "name": None,
-                                       "messages": 0, "last_seen": None})
+                                       "aliases": [], "messages": 0,
+                                       "last_seen": None})
             if msg_key not in seen_msgs:
                 seen_msgs.add(msg_key)
                 u["messages"] += 1
             u["last_seen"] = ts
-            # Stored text is "[Name]: message" — recover the display name.
+            # Stored text is "[Name]: message" — every name this id has
+            # posted under, oldest→newest.
             if user_msg.startswith("[") and "]:" in user_msg[:80]:
-                u["name"] = user_msg[1:user_msg.index("]:")]
+                tag = user_msg[1:user_msg.index("]:")]
+                if tag in u["aliases"]:
+                    u["aliases"].remove(tag)
+                u["aliases"].append(tag)
+
+        # Current name straight from Discord (user id is the stable key;
+        # this stays correct through renames). Tag history is the fallback
+        # for users the bot can no longer see.
+        for u in users.values():
+            current = await self._resolve_user_name(u["user_id"])
+            u["name"] = current or (u["aliases"][-1] if u["aliases"] else None)
+            u["aliases"] = [a for a in u["aliases"] if a != u["name"]]
 
         ranked = sorted(users.values(), key=lambda u: u["messages"], reverse=True)
         return web.json_response({"users": ranked})

@@ -198,7 +198,9 @@ async function renderUsers() {
   const d = await api("/api/users");
   let h = `<table><tr><th>User</th><th class="num">Messages</th><th>Last seen</th></tr>`;
   for (const u of d.users) {
-    h += `<tr><td>${esc(u.name ?? u.user_id)}</td>
+    const aka = u.aliases?.length
+      ? ` <span class="dim">(aka ${u.aliases.map(esc).join(", ")})</span>` : "";
+    h += `<tr><td>${esc(u.name ?? u.user_id)}${aka}</td>
       <td class="num">${u.messages}</td>
       <td class="dim">${fmtTs(u.last_seen)}</td></tr>`;
   }
