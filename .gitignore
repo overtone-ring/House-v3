@@ -28,6 +28,12 @@ logs/
 
 # Claude / Cowork session artifacts
 .claude/
+# CLAUDE.md = local project instructions; has personal notes, keep off the repo
+CLAUDE.md
+
+# Personal / archival — kept locally and in history, not on the repo front-end
+house-archive/
+image_z_image_turbo.json
 
 # Testing
 .pytest_cache/
