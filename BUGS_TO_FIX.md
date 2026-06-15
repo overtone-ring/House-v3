@@ -80,14 +80,15 @@ then doc/cleanup.
 
 ## Design improvements (not bugs — decide if they bite before churning code)
 
-### 8. 5× user-message duplication in memory
-- **Where:** `src/memory/store.py`, `src/memory/models.py:74` (`content_hash`)
-- **What:** Each responding persona stores its own `Exchange` sharing the same
-  `user_msg`. With @Girls, one user line becomes 5 near-identical rows; search
-  surfaces the same text 5×. `seen_ids` dedups by row id, so it won't collapse them.
-  A `content_hash` is computed in `models.py` but never used.
-- **Fix:** Store the user turn once with persona responses as children, or dedup by
-  `content_hash` at search time.
+### ~~8. 5× user-message duplication in memory~~ ✅ FIXED 2026-06-14 (render-side)
+- Fixed at the **render** layer, not storage. Storage keeps one row per persona
+  on purpose — each embeds independently so a persona can filter recall to its own
+  lines (the `Exchange` docstring); collapsing rows would break per-persona memory.
+- The visible waste was in the prompt: `format_unified_context` printed the same
+  `user_msg` once per persona. Now `_format_memory_block` groups exchanges by
+  `(user_msg, date)` and renders the user line once with each persona's reply
+  beneath it. Verified on live data: 12 retrieved rows → 3 distinct user lines.
+- Covered by `tests/test_formatters.py`.
 
 ### 9. Per-persona recall can starve under a shared DB — ⏸ PARTIALLY MITIGATED
 - Re-verified: `fetch_k` is now `top_k * 6 if persona_filter else top_k + 5`
@@ -127,10 +128,16 @@ then doc/cleanup.
 - ~~Windows setup notes~~ — **N/A**: this repo targets macOS/WSL; the reviewer's
   "native Windows" assumption was wrong (per Locke). No Windows docs needed.
 
-### 14. No tests
-- `tests/` is a stub. Highest-leverage targets: `response_parser` (all fallback paths
-  + repetition + truncation + malformed), hybrid search + RRF, buffer attribution,
-  `forced_personas` filtering, JSON roundtrip in orchestrator + dispatch.
+### 14. No tests — ✅ STARTED 2026-06-14 (highest-leverage paths covered)
+- Added stdlib-`unittest` suites (zero new deps; pytest discovers them too):
+  - `tests/test_response_parser.py` — all fallback paths, legacy format, repetition
+    guard, truncation, silence/empty, MAX_TURNS, invalid speakers.
+  - `tests/test_forced_personas.py` — the `apply_forced_personas` filter + dead-air
+    reroute (extracted from the orchestrator into a pure function for testability).
+  - `tests/test_formatters.py` — the #8 memory-grouping renderer.
+- Run: `python -m unittest discover -s tests` (33 tests, all passing).
+- **Still uncovered** (future): hybrid search + RRF, buffer attribution, full
+  orchestrator/dispatch roundtrip. These need DB/provider fixtures — left for later.
 
 ---
 

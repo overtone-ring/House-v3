@@ -46,6 +46,38 @@ from .utils.wire_log import wire_record, new_request_id
 logger = logging.getLogger(__name__)
 
 
+def apply_forced_personas(
+    turns: List[Dict[str, str]],
+    forced_personas: set,
+    fallback_persona: str,
+) -> tuple[List[Dict[str, str]], Optional[str]]:
+    """Filter a scene down to only the addressed (forced) personas.
+
+    When specific personas are @mentioned, no one else should speak. But if
+    the model produced output and spoke ONLY as unaddressed personas, a plain
+    filter would blank the whole scene — silent dead air on the exact path
+    where the user expects a reply. In that case, reroute the discarded text
+    (the fallback persona's turns if present, otherwise everything) to one of
+    the addressed personas.
+
+    Returns (filtered_turns, rerouted_to) where rerouted_to is the persona the
+    reroute landed on, or None if no reroute happened.
+    """
+    if not forced_personas:
+        return turns, None
+
+    filtered = [t for t in turns if t["persona"] in forced_personas]
+    if turns and not filtered:
+        target = sorted(forced_personas)[0]
+        source_turns = (
+            [t for t in turns if t["persona"] == fallback_persona] or turns
+        )
+        filtered = [{"persona": target, "text": t["text"]} for t in source_turns]
+        return filtered, target
+
+    return filtered, None
+
+
 class UnifiedOrchestrator:
     """
     Single-call multi-persona orchestrator.
@@ -235,31 +267,18 @@ class UnifiedOrchestrator:
         )
 
         # Hard guarantee: when specific personas were addressed, silence anyone
-        # else the model may have let speak anyway.
+        # else the model may have let speak anyway (with a dead-air safeguard).
         if forced_personas:
-            filtered = [t for t in turns if t["persona"] in forced_personas]
-            # Never discard a real generation silently. If the model produced
-            # output but spoke only as wrong/unaddressed persona(s), the filter
-            # just blanked everything — the silent-dead-air bug. Reroute the
-            # discarded text to an addressed persona instead of going quiet.
-            # This also covers error placeholders, which always land on the
-            # fallback persona and would otherwise vanish here.
-            if turns and not filtered:
-                target = sorted(forced_personas)[0]
-                source_turns = (
-                    [t for t in turns if t["persona"] == self._fallback_persona]
-                    or turns
-                )
+            turns, rerouted_to = apply_forced_personas(
+                turns, forced_personas, self._fallback_persona
+            )
+            if rerouted_to:
                 logger.warning(
                     "Forced-persona filter would discard the ENTIRE generation: "
                     f"model spoke as {spoke_before} but only {sorted(forced_personas)} "
                     f"{'was' if len(forced_personas) == 1 else 'were'} addressed. "
-                    f"Rerouting {len(source_turns)} turn(s) to {target} instead of dead air."
+                    f"Rerouted to {rerouted_to} instead of dead air."
                 )
-                filtered = [
-                    {"persona": target, "text": t["text"]} for t in source_turns
-                ]
-            turns = filtered
 
         # Wire tap: the parsed scene as it will actually dispatch. Compared
         # against the llm_call record, this shows what the parser kept,

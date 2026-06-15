@@ -139,24 +139,9 @@ def format_unified_context(
 
     # Memories
     if memories:
-        mem_lines = []
-        char_count = 0
-        for mem in memories:
-            content = mem.get("content", "").strip()
-            if not content:
-                continue
-            mem_type = mem.get("type", "exchange")
-            label = MEMORY_LABELS.get(mem_type, "[Memory]")
-            persona = mem.get("persona_name", "")
-            timestamp = mem.get("timestamp", "")[:10]
-            tag = f" ({persona}, {timestamp})" if persona else ""
-            line = f"{label}{tag} {content}"
-            if char_count + len(line) > max_memory_chars:
-                break
-            mem_lines.append(line)
-            char_count += len(line)
-        if mem_lines:
-            sections.append("## Relevant Memories\n" + "\n".join(mem_lines))
+        mem_block = _format_memory_block(memories, max_memory_chars)
+        if mem_block:
+            sections.append("## Relevant Memories\n" + mem_block)
 
     # User relationship
     if user_context:
@@ -165,6 +150,98 @@ def format_unified_context(
             sections.append("## User Context\n" + rel_line)
 
     return "\n\n".join(sections)
+
+
+def _format_memory_block(memories: List[Dict], max_chars: int) -> str:
+    """Render retrieved memories into prompt text.
+
+    Exchanges that share the same user message on the same day are collapsed
+    into one block — the user line printed once, each persona's reply beneath
+    it. An @Girls turn stores one row per responding persona (so each can
+    recall its own line), which without this would repeat the same user text
+    up to 5× in the prompt. Reflections render individually as before.
+    """
+    blocks: List[Dict] = []
+    index_by_key: Dict[tuple, int] = {}
+
+    for mem in memories:
+        mem_type = mem.get("type", "exchange")
+
+        if mem_type == "exchange":
+            record = mem.get("record") or {}
+            user_msg = (record.get("user_msg") or "").strip()
+            response = (record.get("assistant_response") or "").strip()
+            persona = mem.get("persona_name") or record.get("persona_name") or ""
+            date = (mem.get("timestamp") or "")[:10]
+
+            if not user_msg and not response:
+                # No structured record to regroup on — keep the prebuilt
+                # content as a standalone line rather than dropping it.
+                content = (mem.get("content") or "").strip()
+                if content:
+                    blocks.append({"type": "raw", "date": date, "content": content})
+                continue
+
+            key = (user_msg, date)
+            if key in index_by_key:
+                blocks[index_by_key[key]]["responses"].append((persona, response))
+            else:
+                index_by_key[key] = len(blocks)
+                blocks.append({
+                    "type": "exchange",
+                    "date": date,
+                    "user_msg": user_msg,
+                    "responses": [(persona, response)],
+                })
+        else:
+            content = (mem.get("content") or "").strip()
+            if not content:
+                continue
+            blocks.append({
+                "type": "reflection",
+                "date": (mem.get("timestamp") or "")[:10],
+                "persona": mem.get("persona_name") or "",
+                "content": content,
+            })
+
+    out: List[str] = []
+    char_count = 0
+    for block in blocks:
+        text = _render_memory_block(block)
+        if not text:
+            continue
+        if char_count + len(text) > max_chars:
+            break
+        out.append(text)
+        char_count += len(text)
+    return "\n\n".join(out)
+
+
+def _render_memory_block(block: Dict) -> str:
+    """Render one memory block (grouped exchange, reflection, or raw)."""
+    date = block.get("date", "")
+    btype = block["type"]
+
+    if btype == "exchange":
+        tag = f" ({date})" if date else ""
+        lines = [f"{MEMORY_LABELS['exchange']}{tag}", f"User: {block['user_msg']}"]
+        for persona, response in block["responses"]:
+            if not response:
+                continue
+            lines.append(f"  {persona or 'house'}: {response}")
+        return "\n".join(lines)
+
+    if btype == "reflection":
+        persona = block.get("persona", "")
+        if persona:
+            tag = f" ({persona}, {date})" if date else f" ({persona})"
+        else:
+            tag = f" ({date})" if date else ""
+        return f"{MEMORY_LABELS['reflection']}{tag} {block['content']}"
+
+    # raw fallback
+    tag = f" ({date})" if date else ""
+    return f"{MEMORY_LABELS['exchange']}{tag} {block['content']}"
 
 
 def format_relational_primer(
