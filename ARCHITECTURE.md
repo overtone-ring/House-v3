@@ -49,7 +49,7 @@ On startup the runner also kicks off a background **reflection catch-up** (see b
 
 ### Exchange model
 
-An exchange is a **turn pair**: one user message + one persona's response. In a multi-persona reply, the same user message produces several exchanges — one per responding persona — so each embedding ties user intent to a specific persona's voice, and retrieval can filter by `persona_name` ("my memories") or leave it open ("things I witnessed").
+An exchange is a **turn pair**: one user message + one persona's response. In a multi-persona reply, the same user message produces several exchanges — one per responding persona — so each embedding ties user intent to a specific persona's voice, and retrieval can filter by `persona_name` ("my memories") or leave it open ("things I witnessed"). Because that storage fan-out means one `@Girls` line lives as several rows sharing the same `user_msg`, the **render** layer (`formatters._format_memory_block`) regroups retrieved exchanges by `(user_msg, date)` so the prompt shows the user line once with each persona's reply beneath it — the duplication is collapsed at display time, never in storage (collapsing storage would break per-persona recall).
 
 ### Storage (SQLite, single file)
 
@@ -58,7 +58,7 @@ An exchange is a **turn pair**: one user message + one persona's response. In a 
 - `exchanges` + `exchanges_vec` (sqlite-vec, 768-d) + `exchanges_fts` (FTS5, trigger-synced)
 - `reflections` + `reflections_vec` + `reflections_fts`
 - `relationships`, `sessions`
-- WAL mode; writes serialized through a process-level lock since all worker threads share one connection.
+- WAL mode; writes serialized through a process-level lock since all worker threads share one connection. Reads are not locked — SQLite's serialized threading mode protects the data, but a single shared connection under heavy concurrent multi-channel load is the pattern that can surface intermittent "library used incorrectly"/locked errors. Not observed in practice; if it appears in the error log under real load, move to a per-thread connection or a single serialized DB worker.
 
 ### Hybrid search
 
@@ -110,8 +110,18 @@ Other personas' prior messages are folded into history as attributed `user` turn
 - `utils/token_counter.py` — token counting helpers, zero callers.
 - `format_affective_primer()` in `context/formatters.py` — leftover from the deprecated affective subsystem.
 
+## Tests
+
+Stdlib `unittest` (no extra deps; pytest discovers them too). Run: `python -m unittest discover -s tests`. Current coverage is the high-leverage pure-logic paths: `response_parser` (every fallback, repetition guard, truncation, silence, MAX_TURNS), `apply_forced_personas` (the addressed-persona filter + dead-air reroute, extracted from `process_message` into a pure function for testability), and `formatters._format_memory_block` (the render-side dedup). DB/provider-backed paths are not yet covered.
+
 ## What's Next
 
-- Build out the relationship/familiarity system (write path + richer primer).
+- Build out the relationship/familiarity system (write path + richer primer). The `relationships` table and primer exist; nothing writes to them yet.
 - Buffer-archive summarization (the evicted-turn archive exists; summarizing it back into context is not wired up).
-- A test suite (`tests/` is currently a stub).
+- Extend tests to the DB/provider-backed paths: hybrid search + RRF ranking, buffer attribution tagging, and a full orchestrator→dispatch roundtrip (these need DB/provider fixtures).
+
+## Known limitations (watched, not yet fixed)
+
+- **JSON extraction is heuristic.** `response_parser._try_parse_json` tries direct parse → markdown-fence extract → outermost-brace slice. There's no `json-repair`/trailing-comma layer. With `json_mode` on (current models) this hasn't bitten; the dead-air path it used to feed is closed by the `apply_forced_personas` reroute.
+- **Conversation history trims by turn count, not characters.** `get_history_for_unified_llm` keeps the last N turns regardless of length, so very long messages could bloat context. `max_chars`/`token_counter` exist but aren't wired in. Add a char/token budget if context overflow ever shows up.
+- **Single shared DB connection across threads** — see the Storage note above.
