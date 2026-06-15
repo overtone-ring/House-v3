@@ -356,8 +356,11 @@ class UnifiedOrchestrator:
                         metadata={"user_id": user_id} if user_id else None,
                     )
 
-                # Update engagement
-                self._state_manager.record_interaction(persona_name)
+                # Update engagement — off the event loop (sync JSON
+                # read+write, one cycle per responding persona).
+                await asyncio.to_thread(
+                    self._state_manager.record_interaction, persona_name
+                )
 
             except Exception as e:
                 logger.error(

@@ -39,7 +39,6 @@ memory:
   # Vector search defaults
   search:
     top_k: 15
-    min_similarity: 0.0
     recency_weight: 0.1  # How much to favor recent memories (0 = pure similarity)
 
   # Daily reflection settings

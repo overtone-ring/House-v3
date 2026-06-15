@@ -481,22 +481,35 @@ class Watcher(discord.Client):
         mentioned_personas = self._all_mentioned_personas(message, inline_personas)
         girls_triggered = self._girls_role_mentioned(message)
 
-        if not girls_triggered and not mentioned_personas:
+        # A channel with a standing default persona (/set_default) answers
+        # every message there, ping or not — as that persona only. Opt-in:
+        # no default set means the ping gate below still applies.
+        channel_default = self._channel_defaults.get(message.channel.id)
+
+        if not girls_triggered and not mentioned_personas and not channel_default:
             logger.info(
                 f"[Watcher] #{message.channel.name} | ignored (no ping) | "
                 f"{message.author.display_name}: {message.content[:60]}"
             )
             return
 
-        trigger = "girls" if girls_triggered else f"personas={mentioned_personas}"
+        # @Girls = full house (model picks who speaks). Otherwise: explicit
+        # pings if any, else the channel's standing default persona. A @Girls
+        # ping wins over individual pings and over the default.
+        if girls_triggered:
+            forced_personas = None
+            trigger = "girls"
+        elif mentioned_personas:
+            forced_personas = set(mentioned_personas)
+            trigger = f"personas={mentioned_personas}"
+        else:
+            forced_personas = {channel_default}
+            trigger = f"default={channel_default}"
+
         logger.info(
             f"[Watcher] #{message.channel.name} | triggered ({trigger}) | "
             f"{message.author.display_name}: {message.content[:60]}"
         )
-
-        # @Girls = full house (model picks who speaks). Specific pings = only
-        # those personas. A @Girls ping wins over individual pings.
-        forced_personas = None if girls_triggered else set(mentioned_personas)
 
         if girls_triggered:
             cleaned_input = self._strip_role_mention(cleaned_input, message)
@@ -702,10 +715,13 @@ class Watcher(discord.Client):
         if buffer.is_dirty:
             try:
                 data_dir = self._config.get("memory", {}).get("data_dir", "./data")
-                buffer.save(
+                # Off the event loop — sync JSON write would otherwise stall
+                # every other channel's processing for the duration.
+                await asyncio.to_thread(
+                    buffer.save,
                     ConversationBuffer.session_file_path(
                         f"discord_{channel_id}", data_dir
-                    )
+                    ),
                 )
             except Exception as e:
                 logger.warning(f"[Watcher] Buffer save failed: {e}")
@@ -753,9 +769,11 @@ class Watcher(discord.Client):
                 str(k): v for k, v in self._channel_defaults.items()
             },
         }
-        self._watch_state_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._watch_state_path, "w") as f:
-            json.dump(state, f, indent=2)
+        # Atomic write (temp + rename) so a crash mid-write can't truncate or
+        # corrupt the watch list — losing it would silently unwatch every
+        # channel on next start.
+        from ..utils.io import atomic_write_json
+        atomic_write_json(self._watch_state_path, state)
 
     def _load_watch_state(self) -> None:
         """Load persisted watch state from disk."""

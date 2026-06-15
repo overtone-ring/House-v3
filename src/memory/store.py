@@ -388,7 +388,6 @@ class MemoryStore:
         top_k: int = 15,
         persona_filter: Optional[str] = None,
         hybrid: bool = True,
-        min_similarity: float = 0.0,
         exclude_ids: Optional[Set[str]] = None,
     ) -> List[Tuple[dict, float]]:
         """
@@ -401,7 +400,7 @@ class MemoryStore:
         return await asyncio.to_thread(
             self._search_exchanges_sync,
             query_embedding, query_text, top_k, persona_filter,
-            hybrid, min_similarity, exclude_ids,
+            hybrid, exclude_ids,
         )
 
     def _search_exchanges_sync(
@@ -411,7 +410,6 @@ class MemoryStore:
         top_k: int,
         persona_filter: Optional[str],
         hybrid: bool,
-        min_similarity: float,
         exclude_ids: Optional[Set[str]],
     ) -> List[Tuple[dict, float]]:
         exclude_ids = exclude_ids or set()
