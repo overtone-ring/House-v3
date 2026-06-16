@@ -7,10 +7,16 @@
 # OpenRouter is the only provider — it fronts Anthropic/Google/OpenAI/etc.
 # through one OpenAI-compatible endpoint, so there's no provider to select.
 provider:
-  model: google/gemma-4-31b-it
+  model: deepseek/deepseek-v3.2
   # api_key: set in .env or config/local.yaml
   max_tokens: 8192
-  temperature: 0.9
+  # Tuned for expressive personas that still hold the JSON scene structure.
+  # DeepSeek 3.2 held clean at both 0.7 and 0.9 in smoke tests; 0.9 was livelier
+  # if you want more heat. top_p + penalties buy voice variety off the temp knob.
+  temperature: 0.7
+  top_p: 0.92
+  frequency_penalty: 0.3
+  presence_penalty: 0.2
 
 # Reflection model (used for daily reflections, query inference, etc.)
 # Can be a cheaper/faster model since these are internal operations.
