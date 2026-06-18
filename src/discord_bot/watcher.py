@@ -848,6 +848,9 @@ class Watcher(discord.Client):
                 await message.remove_reaction("\U0001f9e0", self.user)
             except discord.HTTPException:
                 pass
+            # Generation never happened — drop the user turn so a re-ping
+            # doesn't leave the unanswered message dangling in the buffer.
+            buffer.drop_last_user_message()
             return
         except Exception as e:
             logger.error(f"[Watcher] Orchestration failed: {e}", exc_info=True)
@@ -855,6 +858,7 @@ class Watcher(discord.Client):
                 await message.remove_reaction("\U0001f9e0", self.user)
             except discord.HTTPException:
                 pass
+            buffer.drop_last_user_message()
             return
 
         # ── Dispatch turns in scene order ────────────────────────
@@ -913,10 +917,17 @@ class Watcher(discord.Client):
                 f"({len(response_text)} chars)"
             )
 
+        # If nothing was dispatched (model produced no usable turns ->
+        # silence), drop the user turn we added before generating so a
+        # resend does not leave the failed message dangling in the buffer.
+        if dispatched == 0:
+            buffer.drop_last_user_message()
+
         # ── Signal: done ─────────────────────────────────────────
         try:
             await message.remove_reaction("\U0001f9e0", self.user)
-            await message.add_reaction("\u2705")  # ✅
+            # ✅ when the House spoke; 💭 when it produced nothing (resend).
+            await message.add_reaction("\u2705" if dispatched else "\U0001f4ad")
         except discord.HTTPException:
             pass
 

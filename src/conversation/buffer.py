@@ -102,6 +102,22 @@ class ConversationBuffer:
         self._turns.append(turn)
         self._dirty = True
 
+    def drop_last_user_message(self) -> bool:
+        """Remove the most recent turn iff it's a user message.
+
+        Undoes a user turn whose generation produced no response (e.g. the
+        model emitted malformed output the parser rejected as silence, or the
+        provider was unavailable), so a resend doesn't leave the failed
+        message dangling in context with no reply after it. Safe because
+        per-channel processing is serialized — on a failed generation the user
+        turn just added is still the last turn. Returns True if one was removed.
+        """
+        if self._turns and self._turns[-1].role == "user":
+            self._turns.pop()
+            self._dirty = True
+            return True
+        return False
+
     # ── Retrieval ─────────────────────────────────────────────────
 
     def get_history_for_llm(
