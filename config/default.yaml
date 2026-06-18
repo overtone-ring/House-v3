@@ -111,6 +111,11 @@ discord:
   # config/local.yaml (gitignored), not here. Enable Discord Developer Mode →
   # right-click yourself → Copy User ID.
   owner_ids: []
+  # Prefix for text-based admin commands (e.g. "!house watch"). These mirror
+  # the slash commands but work with only the bot scope + message-content
+  # intent — so they function on servers that didn't grant the slash-command
+  # scope (applications.commands). Same admin/owner gating as the slash ones.
+  command_prefix: "!house"
   # Abuse guards for public servers. Each trigger is a paid LLM call:
   # a user must wait this many seconds between triggers, and at most this
   # many messages may queue behind a channel's processing lock. Throttled

@@ -119,6 +119,14 @@ class Watcher(discord.Client):
             int(uid) for uid in discord_config.get("owner_ids", []) if str(uid).strip()
         }
 
+        # Prefix for text-based admin commands (e.g. "!house watch"). Text
+        # commands work with only the bot scope + message-content intent, so
+        # they function on servers where the slash-command scope
+        # (applications.commands) wasn't granted. Same admin/owner gating.
+        self._cmd_prefix: str = str(
+            discord_config.get("command_prefix", "!house")
+        ).strip().lower()
+
         # on_ready re-fires on every new gateway session; one-time setup
         # (watch state load, command sync) must not re-run on reconnect.
         self._ready_initialized = False
@@ -458,6 +466,201 @@ class Watcher(discord.Client):
                 logger.warning(f"[Watcher] Announce failed in channel {cid}: {e}")
         return sent
 
+    # ── Text commands (!house ...) ───────────────────────────────
+    # Mirror the slash commands, but as message-prefix commands so they work
+    # on servers that didn't grant the slash-command scope. Same gating:
+    # an operator in discord.owner_ids, or a server admin.
+
+    def _is_authorized_member(self, member: discord.abc.User) -> bool:
+        if member.id in self._owner_ids:
+            return True
+        perms = getattr(member, "guild_permissions", None)
+        return bool(perms and perms.administrator)
+
+    def _command_target_channel(self, message: discord.Message):
+        """Channel a command acts on: the first #mention, else the channel
+        the command was sent in. Returns None if that isn't a text channel."""
+        if message.channel_mentions:
+            ch = message.channel_mentions[0]
+        else:
+            ch = message.channel
+        return ch if isinstance(ch, discord.TextChannel) else None
+
+    async def _handle_house_command(self, message: discord.Message):
+        """Parse and dispatch a `!house <subcommand> [args]` message."""
+        if not self._is_authorized_member(message.author):
+            await message.reply("Not authorized.", mention_author=False)
+            return
+
+        parts = message.content.split()
+        sub = parts[1].lower() if len(parts) > 1 else "help"
+        args = parts[2:]
+
+        handlers = {
+            "watch": self._cmd_watch,
+            "unwatch": self._cmd_unwatch,
+            "channels": self._cmd_channels,
+            "status": self._cmd_status,
+            "set_default": self._cmd_set_default,
+            "clear_default": self._cmd_clear_default,
+            "reset_buffer": self._cmd_reset_buffer,
+            "help": self._cmd_help,
+        }
+        handler = handlers.get(sub)
+        if handler is None:
+            await message.reply(
+                f"Unknown command `{sub}`. Try `{self._cmd_prefix} help`.",
+                mention_author=False,
+            )
+            return
+        try:
+            await handler(message, args)
+        except Exception as e:
+            logger.error(f"[Watcher] !house {sub} failed: {e}", exc_info=e)
+            await message.reply("Command failed — check the logs.", mention_author=False)
+
+    async def _cmd_help(self, message: discord.Message, args):
+        p = self._cmd_prefix
+        await message.reply(
+            "**House commands** (admin/owner only):\n"
+            f"`{p} watch [#channel]` — start responding in a channel (default: here)\n"
+            f"`{p} unwatch [#channel]` — stop responding there\n"
+            f"`{p} channels` — list watched channels\n"
+            f"`{p} status` — bot fleet status\n"
+            f"`{p} set_default [#channel] <persona>` — one persona answers every message there\n"
+            f"`{p} clear_default [#channel]` — remove that default\n"
+            f"`{p} reset_buffer [#channel]` — clear a channel's conversation history",
+            mention_author=False,
+        )
+
+    async def _cmd_watch(self, message: discord.Message, args):
+        channel = self._command_target_channel(message)
+        if channel is None:
+            await message.reply("Pick a text channel.", mention_author=False)
+            return
+        self._watched_channel_ids.add(channel.id)
+        self._save_watch_state()
+        await message.reply(
+            f"Now watching **#{channel.name}**. Personas will respond to messages there.",
+            mention_author=False,
+        )
+        logger.info(f"[Watcher] Now watching #{channel.name} ({channel.id})")
+
+    async def _cmd_unwatch(self, message: discord.Message, args):
+        channel = self._command_target_channel(message)
+        if channel is None:
+            await message.reply("Pick a text channel.", mention_author=False)
+            return
+        self._watched_channel_ids.discard(channel.id)
+        self._channel_defaults.pop(channel.id, None)
+        self._save_watch_state()
+        await message.reply(
+            f"Stopped watching **#{channel.name}**.", mention_author=False
+        )
+        logger.info(f"[Watcher] Stopped watching #{channel.name} ({channel.id})")
+
+    async def _cmd_channels(self, message: discord.Message, args):
+        if not self._watched_channel_ids:
+            await message.reply(
+                f"Not watching any channels. Use `{self._cmd_prefix} watch` to add one.",
+                mention_author=False,
+            )
+            return
+        lines = []
+        for cid in sorted(self._watched_channel_ids):
+            ch = self.get_channel(cid)
+            name = f"#{ch.name}" if ch else f"(unknown: {cid})"
+            default = self._channel_defaults.get(cid)
+            suffix = f" → **{default}**" if default else ""
+            lines.append(f"• {name}{suffix}")
+        await message.reply(
+            "**Watched channels:**\n" + "\n".join(lines), mention_author=False
+        )
+
+    async def _cmd_status(self, message: discord.Message, args):
+        lines = ["**Bot Fleet Status**\n"]
+        for name, client in self._persona_clients.items():
+            if client.is_ready() and client.user:
+                lines.append(f"• **{name.capitalize()}**: online ({client.user})")
+            else:
+                lines.append(f"• **{name.capitalize()}**: offline")
+        lines.append(f"\n**Watched channels:** {len(self._watched_channel_ids)}")
+        lines.append(f"**Active buffers:** {len(self._buffers)}")
+        unified = self._config.get("unified", {})
+        json_mode = unified.get("json_mode", True)
+        lines.append(f"**Mode:** unified generation (json_mode={'on' if json_mode else 'off'})")
+        tts_provider = self._config.get("tts", {}).get("provider", "none")
+        lines.append(f"**TTS:** {tts_provider}")
+        await message.reply("\n".join(lines), mention_author=False)
+
+    async def _cmd_set_default(self, message: discord.Message, args):
+        personas = [p.lower() for p in self._config.get("personas", [])]
+        persona = next((a.lower() for a in args if a.lower() in personas), None)
+        if persona is None:
+            await message.reply(
+                f"Usage: `{self._cmd_prefix} set_default [#channel] <persona>` — "
+                f"persona one of: {', '.join(personas)}",
+                mention_author=False,
+            )
+            return
+        channel = self._command_target_channel(message)
+        if channel is None:
+            await message.reply("Pick a text channel.", mention_author=False)
+            return
+        self._channel_defaults[channel.id] = persona
+        self._watched_channel_ids.add(channel.id)
+        self._save_watch_state()
+        await message.reply(
+            f"**#{channel.name}** → **{persona}** will always respond "
+            f"(arbitrator bypassed).",
+            mention_author=False,
+        )
+        logger.info(f"[Watcher] #{channel.name} default set to {persona}")
+
+    async def _cmd_clear_default(self, message: discord.Message, args):
+        channel = self._command_target_channel(message)
+        if channel is None:
+            await message.reply("Pick a text channel.", mention_author=False)
+            return
+        removed = self._channel_defaults.pop(channel.id, None)
+        self._save_watch_state()
+        if removed:
+            await message.reply(
+                f"Cleared default persona for **#{channel.name}**. "
+                f"Arbitrator will decide who responds.",
+                mention_author=False,
+            )
+        else:
+            await message.reply(
+                f"**#{channel.name}** had no default persona set.",
+                mention_author=False,
+            )
+
+    async def _cmd_reset_buffer(self, message: discord.Message, args):
+        channel = self._command_target_channel(message)
+        if channel is None:
+            await message.reply("Pick a text channel.", mention_author=False)
+            return
+        # Take the channel's processing lock so an in-flight message (holding
+        # the old buffer object) can't re-save it after the reset.
+        async with self._channel_locks.setdefault(channel.id, asyncio.Lock()):
+            if channel.id in self._buffers:
+                self._buffers[channel.id].clear()
+                del self._buffers[channel.id]
+            data_dir = self._config.get("memory", {}).get("data_dir", "./data")
+            buf_path = Path(
+                ConversationBuffer.session_file_path(
+                    f"discord_{channel.id}", data_dir
+                )
+            )
+            if buf_path.exists():
+                buf_path.unlink()
+        await message.reply(
+            f"Conversation buffer for **#{channel.name}** has been cleared.",
+            mention_author=False,
+        )
+        logger.info(f"[Watcher] Buffer cleared for #{channel.name} ({channel.id})")
+
     async def on_message(self, message: discord.Message):
         """
         Main message handler.
@@ -470,6 +673,14 @@ class Watcher(discord.Client):
 
         # Ignore DMs (for now — could support later)
         if not message.guild:
+            return
+
+        # ── Text admin commands (!house ...) ─────────────────────
+        # Handled before the watched-channel gate so `!house watch` works in a
+        # channel that isn't watched yet. Authorization is checked inside.
+        first = message.content.split(maxsplit=1)[0].lower() if message.content else ""
+        if first == self._cmd_prefix:
+            await self._handle_house_command(message)
             return
 
         # Only respond in watched channels
