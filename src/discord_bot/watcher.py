@@ -111,6 +111,14 @@ class Watcher(discord.Client):
         self._last_trigger_at: Dict[int, float] = {}  # user_id → time.monotonic()
         self._queued_count: Dict[int, int] = {}  # channel_id → waiting messages
 
+        # Slash-command operators. On a server where you aren't an admin you
+        # can't use the admin-gated commands, so list your Discord user ID(s)
+        # here to authorize them by identity instead of by server role. A
+        # server Administrator is always authorized too.
+        self._owner_ids: set = {
+            int(uid) for uid in discord_config.get("owner_ids", []) if str(uid).strip()
+        }
+
         # on_ready re-fires on every new gateway session; one-time setup
         # (watch state load, command sync) must not re-run on reconnect.
         self._ready_initialized = False
@@ -131,10 +139,12 @@ class Watcher(discord.Client):
     def _register_commands(self):
         """Register all slash commands on the command tree."""
 
-        def admin_only(interaction: discord.Interaction) -> bool:
-            # Runtime backstop: default_permissions is only a *default* — any
-            # server's admins can re-grant these commands to @everyone via
-            # Integrations settings, and DMs have no permission model at all.
+        def is_authorized(interaction: discord.Interaction) -> bool:
+            # Runtime gate. Commands are visible to everyone (no
+            # default_permissions), so this is the real authorization check:
+            # an operator listed in discord.owner_ids, OR a server admin.
+            if interaction.user.id in self._owner_ids:
+                return True
             perms = getattr(interaction.user, "guild_permissions", None)
             return bool(perms and perms.administrator)
 
@@ -146,7 +156,7 @@ class Watcher(discord.Client):
             if isinstance(error, app_commands.CheckFailure):
                 if not interaction.response.is_done():
                     await interaction.response.send_message(
-                        "Admin only.", ephemeral=True
+                        "Not authorized.", ephemeral=True
                     )
                 return
             logger.error(f"[Watcher] Slash command error: {error}", exc_info=error)
@@ -159,9 +169,8 @@ class Watcher(discord.Client):
             name="watch",
             description="Start watching a channel — the personas will respond to messages here",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         @app_commands.describe(channel="The channel to start watching")
         async def watch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.add(channel.id)
@@ -176,9 +185,8 @@ class Watcher(discord.Client):
             name="unwatch",
             description="Stop watching a channel — personas will no longer respond here",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         @app_commands.describe(channel="The channel to stop watching")
         async def unwatch(interaction: discord.Interaction, channel: discord.TextChannel):
             self._watched_channel_ids.discard(channel.id)
@@ -194,9 +202,8 @@ class Watcher(discord.Client):
             name="channels",
             description="List all currently watched channels",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         async def channels(interaction: discord.Interaction):
             if not self._watched_channel_ids:
                 await interaction.response.send_message(
@@ -222,9 +229,8 @@ class Watcher(discord.Client):
             name="status",
             description="Show the bot fleet status — who's online, what's being watched",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         async def status(interaction: discord.Interaction):
             lines = ["**Bot Fleet Status**\n"]
 
@@ -257,9 +263,8 @@ class Watcher(discord.Client):
             name="set_default",
             description="Set a default persona for a channel — skips the arbitrator",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         @app_commands.describe(
             channel="The channel to set a default for",
             persona="The persona who always responds in this channel",
@@ -290,9 +295,8 @@ class Watcher(discord.Client):
             name="clear_default",
             description="Remove the default persona for a channel — use the arbitrator again",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         @app_commands.describe(channel="The channel to clear the default for")
         async def clear_default(
             interaction: discord.Interaction,
@@ -316,9 +320,8 @@ class Watcher(discord.Client):
             name="reset_buffer",
             description="Clear the conversation history for a channel — fresh start",
         )
-        @app_commands.default_permissions(administrator=True)
         @app_commands.guild_only()
-        @app_commands.check(admin_only)
+        @app_commands.check(is_authorized)
         @app_commands.describe(channel="The channel to reset")
         async def reset_buffer(
             interaction: discord.Interaction,

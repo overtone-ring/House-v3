@@ -104,6 +104,13 @@ discord:
   # (@Girls) summons the whole house; pinging an individual persona bot
   # summons only that persona. Messages with neither ping are ignored.
   girls_role: Girls
+  # Slash-command operators by Discord user ID. On a server where you aren't
+  # an Administrator you can't use the admin-gated commands (/watch, /status,
+  # /reset_buffer, etc.), so list your own user ID here to authorize them by
+  # identity. Server admins are always authorized too. Put real IDs in
+  # config/local.yaml (gitignored), not here. Enable Discord Developer Mode →
+  # right-click yourself → Copy User ID.
+  owner_ids: []
   # Abuse guards for public servers. Each trigger is a paid LLM call:
   # a user must wait this many seconds between triggers, and at most this
   # many messages may queue behind a channel's processing lock. Throttled
