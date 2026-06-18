@@ -27,14 +27,43 @@ User message in a watched channel
        └─ UnifiedOrchestrator.process_message()
             ├─ query inference: "does this need a memory search?"
             ├─ unified context retrieval (parallel memory search, all personas)
-            ├─ format contextual primer (memories + optional routing directive)
-            ├─ single LLM call (json_mode, unified system prompt)
-            ├─ response parser (ordered turns + fallback chain + repetition
-            │   guard + 6000-char runaway cap; Discord layer splits >2000)
+            ├─ format contextual primer (memories)
+            ├─ PATH A — @Girls: single LLM call (unified system prompt) →
+            │   response parser (ordered turns + fallback chain + repetition
+            │   guard + 6000-char runaway cap) → forced-persona filter (no-op
+            │   for @Girls)
+            ├─ PATH B — addressed (persona ping/reply), per_persona_when_addressed:
+            │   one dedicated call per addressed persona using its SOLO prompt,
+            │   run sequentially so each sees the prior ones (cross-talk); plain
+            │   prose, no parse, same per-turn clean/repetition guard
             └─ fire-and-forget post-process (record exchanges, bump engagement)
   └─ Dispatch turns in scene order via each persona's own PersonaClient bot,
       with a short typing beat between turns
 ```
+
+### Hybrid generation (the two paths)
+
+`@Girls` is one shared generation — five voices in one call — because that's
+where cross-talk between personas is the point. But that single generation,
+under a deep buffer, erodes the signals that need constant reinforcement:
+cross-talk decays into parallel monologues, output occasionally malforms, and
+the lone male persona (Frank, against four women + a role literally named
+"Girls") drifts female. All three trace to one root — **one generation holding
+five identities under accumulating context**.
+
+So the **addressed path** (a persona ping or a reply to a persona) switched to
+a **dedicated call per persona** (`unified.per_persona_when_addressed`,
+`_generate_persona_scene`). A single ping — the common case — is one isolated
+call with only that persona's identity in context (`data/personas/solo/<persona>.md`),
+which structurally removes the gender bleed, the malformed-shape failure, and
+the "whole scene dumped through one bot" parse bug. When 2+ personas are
+addressed at once they generate **sequentially**, each prepended a short
+`[In the room just now:]` block of the prior turns so cross-talk survives
+without a shared generation. Cost/latency rise on this path (N× for N
+addressed personas, sequential so additive) — accepted; `@Girls` is unchanged.
+Set the flag false to revert the addressed path to unified + `apply_forced_personas`.
+The solo prompts are five standalone files (intentional duplication of the
+shared room/dynamics text — editable per-persona, may drift from `unified_house.md`).
 
 ## Process Model
 
@@ -128,3 +157,4 @@ Stdlib `unittest` (no extra deps; pytest discovers them too). Run: `python -m un
 - **Personas under-cross-talk under a deep buffer.** Diagnosed 2026-06-16 from the wire log: live `@Girls` scenes come back as *parallel monologues* — each persona answers the user once, no one takes a second turn or addresses another persona by name (0/8 scenes had a second beat). Cold smoke runs (no buffer) cross-talk fine, so the suspected cause is **in-context imitation**: the live buffer is full of single-voice/parallel exchanges, and the model copies that established rhythm over the system prompt's cross-talk instruction — a self-reinforcing loop (each parallel-monologue scene gets recorded and reinforces the next). Note the gate compounds it: a single-persona ping filters the scene to that persona (`apply_forced_personas`), so cross-talk can *only* surface on `@Girls` or a multi-persona ping.
   - **2026-06-16 mitigation (insufficient alone):** strengthened `unified_house.md` (de-hedged the multi-turn rule into an engagement mandate, added a group-scale cross-talk few-shot, added an explicit parallel-monologue ❌ / conversation ✅ contrast). Side effect: turns got ~50% shorter (the new few-shots were terse and DeepSeek imitated them) *without* producing cross-talk — the worst trade.
   - **2026-06-17 follow-up (the lever that worked in smoke):** DeepSeek is a roleplay-tuned model, and the prompt was **banning physical action / asterisk emotes** — the exact RP idiom the model is strongest at, and the cleanest way one persona engages another (acting *on* them). Changes: (1) lifted the action ban → action/gesture now allowed and encouraged, first-person voice preserved; (2) added a user-agency rule (personas control only themselves + the room, never narrate the user); (3) replaced the permissive length line with a concrete floor (developed 2–4-paragraph turns are normal for the talkers — DeepSeek optimizes toward brevity when instructions are permissive, where Gemma rambled regardless); (4) lengthened the few-shots + added action beats so they stop teaching terseness; (5) dropped `frequency_penalty`/`presence_penalty` in config (limited effect on DeepSeek's API; a frequency penalty mildly suppresses length). Smoke result: length restored, action beats landed in-voice, and a 2–3-persona scene produced a real second beat (Ellie reacting to Frank, Frank firing back at Ellie). **Still open:** the 5-voice `@Girls` fan-out stayed parallel even in smoke, and none of this is yet proven under a deep live buffer. Next levers if the buffer wins: surface scene boundaries in history so past multi-voice moments read as such; or let un-addressed personas contribute reaction turns on a single ping.
+  - **2026-06-18 structural change (the addressed path moved off the shared generation):** see "Hybrid generation" in Request Flow. A persona ping/reply now generates that persona in its own solo call (`per_persona_when_addressed`), and 2+ addressed personas generate sequentially with the prior turns fed in. This removes the shared-generation root cause *on the addressed path*: Frank's solo prompt has no female framing (gender bleed gone), each call is single-voice (no malformed scene shape, no "dumped through one bot"), and multi-ping cross-talk is now an explicit sequential feed rather than an emergent property that decays. **`@Girls` still rides the single shared generation** — the parallel-monologue problem above is unchanged there and remains the open frontier.

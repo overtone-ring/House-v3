@@ -105,6 +105,63 @@ def main():
               f"${total_cost:.5f}  (~${total_cost / len(TEST_MESSAGES):.5f}/msg)")
         print(f"At this rate, $37 ≈ {int(37 / (total_cost / len(TEST_MESSAGES))):,} messages")
 
+    # ── Addressed (solo) path ────────────────────────────────────
+    # Exercises per-persona generation: a single ping (one isolated call) and a
+    # 2-persona sequential scene where the second persona sees the first's turn
+    # (cross-talk). Solo-call cost isn't tallied here — this is a qualitative
+    # check (clean single voice, Frank never misgenders himself).
+    if not unified_cfg.get("per_persona_when_addressed"):
+        return
+
+    solo_dir = ROOT / unified_cfg.get("solo_prompt_dir", "data/personas/solo")
+    print(f"\n\n{'#' * 70}\n# ADDRESSED PATH (per-persona solo calls)\n{'#' * 70}")
+
+    def solo_call(name, user_msg, prior_block=None):
+        path = solo_dir / f"{name}.md"
+        if not path.exists():
+            print(f"  !! no solo prompt for {name} at {path}")
+            return None, 0.0
+        sp = path.read_text().strip()
+        start = time.monotonic()
+        try:
+            r = provider.generate(
+                prompt=user_msg, system_prompt=sp,
+                contextual_primer=prior_block, json_mode=False,
+            )
+        except Exception as e:
+            print(f"  !! {name} solo failed: {type(e).__name__}: {e}")
+            return None, time.monotonic() - start
+        return r.text.strip(), time.monotonic() - start
+
+    # 1) Single ping — one isolated call, only Frank's identity in context
+    single_msg = "[DieselDave]: frank, you doing okay man?"
+    print(f"\n[single] USER: {single_msg}")
+    text, lat = solo_call("frank", single_msg)
+    if text:
+        print(f"  frank | {lat:.1f}s\n  ▸ FRANK: {text}\n")
+        low = f" {text.lower()} "
+        if any(w in low for w in (" she ", " her ", "i'm a girl", "i am a girl")):
+            print("  ⚠️  Frank may be misgendering himself — check the output above")
+
+    # 2) Two-persona sequential — Zagna's call sees Frank's turn
+    time.sleep(3)
+    multi_msg = (
+        "[Locke]: frank, zagna — talk me down, I want to rewrite "
+        "everything from scratch"
+    )
+    print(f"\n[sequential] USER: {multi_msg}")
+    f_text, f_lat = solo_call("frank", multi_msg)
+    prior, total_lat = None, f_lat
+    if f_text:
+        print(f"  frank | {f_lat:.1f}s\n  ▸ FRANK: {f_text}\n")
+        prior = f"[In the room just now:]\nFrank: {f_text}"
+    time.sleep(3)
+    z_text, z_lat = solo_call("zagna", multi_msg, prior_block=prior)
+    total_lat += z_lat
+    if z_text:
+        print(f"  zagna | {z_lat:.1f}s (sees Frank's turn)\n  ▸ ZAGNA: {z_text}\n")
+    print(f"  sequential total latency: {total_lat:.1f}s")
+
 
 if __name__ == "__main__":
     main()

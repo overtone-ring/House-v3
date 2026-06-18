@@ -77,6 +77,16 @@ unified:
   output_format: transcript
   json_mode: true        # Only consulted when output_format is unset (legacy)
   fallback_persona: elvira  # If parsing fails, assign response to this persona
+  # Hybrid generation. When a specific persona is addressed (a persona ping or a
+  # reply to a persona), generate that persona's reply from its own solo prompt
+  # in a dedicated call, instead of the unified scene + forced-persona filter. A
+  # single ping is one isolated call (no other identities in context — kills the
+  # gender bleed / malformed-shape / "dumped through one bot" failures). When 2+
+  # personas are addressed at once they generate sequentially, each seeing the
+  # prior ones' output so cross-talk survives. @Girls is unaffected — it always
+  # uses the single unified call. Set false to revert to unified+filter.
+  per_persona_when_addressed: true
+  solo_prompt_dir: data/personas/solo  # One <persona>.md per persona
 
 # ── TTS (Text-to-Speech) ────────────────────────────────────────────
 tts:

@@ -255,8 +255,14 @@ class Watcher(discord.Client):
 
             # Generation mode
             unified = self._config.get("unified", {})
-            json_mode = unified.get("json_mode", True)
-            lines.append(f"**Mode:** unified generation (json_mode={'on' if json_mode else 'off'})")
+            fmt = unified.get(
+                "output_format", "json" if unified.get("json_mode", True) else "plain"
+            )
+            solo = "on" if unified.get("per_persona_when_addressed", False) else "off"
+            lines.append(
+                f"**@Girls:** unified scene ({fmt}) | "
+                f"**addressed:** per-persona solo {solo}"
+            )
 
             # TTS
             tts_provider = self._config.get("tts", {}).get("provider", "none")
@@ -587,8 +593,14 @@ class Watcher(discord.Client):
         lines.append(f"\n**Watched channels:** {len(self._watched_channel_ids)}")
         lines.append(f"**Active buffers:** {len(self._buffers)}")
         unified = self._config.get("unified", {})
-        json_mode = unified.get("json_mode", True)
-        lines.append(f"**Mode:** unified generation (json_mode={'on' if json_mode else 'off'})")
+        fmt = unified.get(
+            "output_format", "json" if unified.get("json_mode", True) else "plain"
+        )
+        solo = "on" if unified.get("per_persona_when_addressed", False) else "off"
+        lines.append(
+            f"**@Girls:** unified scene ({fmt}) | "
+            f"**addressed:** per-persona solo {solo}"
+        )
         tts_provider = self._config.get("tts", {}).get("provider", "none")
         lines.append(f"**TTS:** {tts_provider}")
         await message.reply("\n".join(lines), mention_author=False)
@@ -709,15 +721,17 @@ class Watcher(discord.Client):
 
         # @Girls = full house (model picks who speaks). Otherwise: explicit
         # pings if any, else the channel's standing default persona. A @Girls
-        # ping wins over individual pings and over the default.
+        # ping wins over individual pings and over the default. The addressed
+        # list is kept ORDERED (mention order) — the orchestrator's solo path
+        # generates personas in this order, each seeing the prior ones.
         if girls_triggered:
             forced_personas = None
             trigger = "girls"
         elif mentioned_personas:
-            forced_personas = set(mentioned_personas)
+            forced_personas = list(mentioned_personas)
             trigger = f"personas={mentioned_personas}"
         else:
-            forced_personas = {channel_default}
+            forced_personas = [channel_default]
             trigger = f"default={channel_default}"
 
         logger.info(
@@ -780,7 +794,7 @@ class Watcher(discord.Client):
         self,
         message: discord.Message,
         cleaned_input: str,
-        forced_personas: Optional[Set[str]],
+        forced_personas: Optional[List[str]],
     ):
         """Process a single user message through the full pipeline."""
         channel_name = message.channel.name

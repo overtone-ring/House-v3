@@ -241,6 +241,18 @@ def _clean_text(persona: str, value) -> Optional[str]:
     return cleaned
 
 
+def clean_persona_text(persona: str, raw_text: str) -> Optional[str]:
+    """Clean a single persona's raw solo-call output into dispatchable text.
+
+    The solo / per-persona path generates one persona's reply in its own call
+    (plain prose, no transcript labels), so there's nothing to parse — but it
+    still needs the same guards the scene parser applies per turn: drop empty
+    or repetition-looped output, truncate runaway length. Returns None when the
+    turn should be dropped (empty or degenerate), mirroring _clean_text.
+    """
+    return _clean_text(persona, raw_text)
+
+
 def _extract_turns(parsed, valid_personas: List[str]) -> List[Dict[str, str]]:
     """
     Pull an ordered turn list out of whatever JSON shape the model produced.

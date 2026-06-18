@@ -40,7 +40,11 @@ from .context.formatters import format_unified_context
 from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
-from .response_parser import parse_house_turns, parse_house_transcript
+from .response_parser import (
+    parse_house_turns,
+    parse_house_transcript,
+    clean_persona_text,
+)
 from .utils.wire_log import wire_record, new_request_id
 
 logger = logging.getLogger(__name__)
@@ -109,6 +113,17 @@ class UnifiedOrchestrator:
         ).lower()
         self._fallback_persona = unified_cfg.get("fallback_persona", self.default_persona)
 
+        # Hybrid generation: when a specific persona is addressed (ping/reply),
+        # generate it from its own solo prompt in a dedicated call instead of
+        # the unified scene + filter. Loaded in initialize() if enabled.
+        self._per_persona_enabled = bool(
+            unified_cfg.get("per_persona_when_addressed", False)
+        )
+        self._solo_prompt_dir = unified_cfg.get(
+            "solo_prompt_dir", "data/personas/solo"
+        )
+        self._solo_prompts: Dict[str, str] = {}
+
         # Components (initialized in initialize())
         self._provider: Optional[BaseProvider] = None
         self._memory_services: Dict[str, MemoryService] = {}
@@ -124,8 +139,12 @@ class UnifiedOrchestrator:
 
     async def initialize(self) -> None:
         """Initialize all components."""
-        # Load unified system prompt
+        # Load unified system prompt (drives @Girls and any fallback)
         self._unified_prompt = self._load_prompt()
+
+        # Load per-persona solo prompts for the addressed path
+        if self._per_persona_enabled:
+            self._solo_prompts = self._load_solo_prompts()
 
         # Create provider
         provider_config = dict(self.config.get("provider", {}))
@@ -174,6 +193,34 @@ class UnifiedOrchestrator:
         logger.info(f"Loaded unified prompt: {len(prompt)} chars from {path}")
         return prompt
 
+    def _load_solo_prompts(self) -> Dict[str, str]:
+        """Load each persona's standalone solo prompt from solo_prompt_dir.
+
+        One `<persona>.md` per persona. Personas without a readable file are
+        omitted — process_message falls back to the unified call for any
+        addressed persona missing here, so a partial set degrades gracefully
+        instead of crashing at startup.
+        """
+        from .utils.paths import get_project_root
+        base = Path(self._solo_prompt_dir)
+        if not base.is_absolute():
+            base = get_project_root() / base
+
+        prompts: Dict[str, str] = {}
+        for persona in self.personas:
+            path = base / f"{persona}.md"
+            if not path.exists():
+                logger.warning(
+                    f"Solo prompt missing for '{persona}' at {path} — that "
+                    f"persona will use the unified call when addressed"
+                )
+                continue
+            prompts[persona] = path.read_text(encoding="utf-8").strip()
+        logger.info(
+            f"Loaded {len(prompts)}/{len(self.personas)} solo prompts from {base}"
+        )
+        return prompts
+
     # ── Main Entry Point ─────────────────────────────────────────
 
     async def process_message(
@@ -183,15 +230,17 @@ class UnifiedOrchestrator:
         user_id: Optional[str] = None,
         channel_name: Optional[str] = None,
         conversation_buffer: Optional[ConversationBuffer] = None,
-        forced_personas: Optional[set] = None,
+        forced_personas: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """
         Process a user message through the unified pipeline.
 
         Args:
             forced_personas: If set, only these personas may respond — used when
-                specific personas are @mentioned. None means the whole house is
-                summoned (@Girls) and the model decides who speaks.
+                specific personas are @mentioned. Order matters: on the solo
+                path the personas speak in this order, each seeing the prior
+                ones. None means the whole house is summoned (@Girls) and the
+                model decides who speaks.
 
         Returns:
             Ordered list of turns: [{"persona": name, "text": str}, ...].
@@ -231,69 +280,95 @@ class UnifiedOrchestrator:
             user_context=context.get("user_context"),
         )
 
-        # Routing directive: when specific personas were @mentioned, tell the
-        # model only they were addressed so it doesn't waste tokens (or break
-        # character) on the others. The output is also filtered in Step 5 as a
-        # hard guarantee.
-        if forced_personas:
-            names = ", ".join(sorted(p.capitalize() for p in forced_personas))
-            was = "was" if len(forced_personas) == 1 else "were"
-            directive = (
-                f"[Routing: only {names} {was} directly addressed this turn. "
-                f"Only they should respond; everyone else stays silent.]"
-            )
-            contextual_primer = (
-                f"{contextual_primer}\n\n{directive}" if contextual_primer else directive
-            )
-
-        # Step 4: Single LLM call
-        response_text = await self._generate(
-            user_input=user_input,
-            contextual_primer=contextual_primer,
-            conversation_history=conversation_history,
+        # ── Path selection ───────────────────────────────────────
+        # Addressed path (a persona ping or reply): when enabled and every
+        # addressed persona has a solo prompt, generate each one in its own
+        # dedicated call — sequentially, so a later persona sees the earlier
+        # ones and cross-talk survives. Each call is single-voice by
+        # construction, so no routing directive or forced-persona filter is
+        # needed. @Girls (forced_personas is None), the flag off, or a persona
+        # missing a solo prompt all fall through to the unified call.
+        use_solo = bool(
+            forced_personas
+            and self._per_persona_enabled
+            and all(p in self._solo_prompts for p in forced_personas)
         )
 
-        # Step 5: Parse response into an ordered scene
-        if self._output_format == "transcript":
-            turns = parse_house_transcript(
-                response_text,
-                valid_personas=self.personas,
-                default_persona=self._fallback_persona,
+        if use_solo:
+            turns = await self._generate_persona_scene(
+                personas_ordered=list(forced_personas),
+                user_input=user_input,
+                contextual_primer=contextual_primer,
+                conversation_history=conversation_history,
             )
-        elif self._output_format == "json":
-            turns = parse_house_turns(
-                response_text,
-                valid_personas=self.personas,
-                default_persona=self._fallback_persona,
+            spoke_before = list(dict.fromkeys(t["persona"] for t in turns))
+            logger.info(
+                f"Solo path: {len(turns)} turn(s) from {spoke_before or 'NONE'} "
+                f"| addressed={list(forced_personas)}"
             )
         else:
-            # Plain-text mode: entire response goes to the fallback persona.
-            # Intended for single-persona configurations where structured
-            # shaping is dead weight on the model.
-            text = response_text.strip()
-            turns = [{"persona": self._fallback_persona, "text": text}] if text else []
-
-        # Visibility: who the model actually chose to speak as, before any
-        # forced-persona filtering. This is the ground truth of the generation.
-        spoke_before = list(dict.fromkeys(t["persona"] for t in turns))
-        logger.info(
-            f"Model produced {len(turns)} turn(s) from: {spoke_before or 'NONE'}"
-            + (f" | forced={sorted(forced_personas)}" if forced_personas else "")
-        )
-
-        # Hard guarantee: when specific personas were addressed, silence anyone
-        # else the model may have let speak anyway (with a dead-air safeguard).
-        if forced_personas:
-            turns, rerouted_to = apply_forced_personas(
-                turns, forced_personas, self._fallback_persona
-            )
-            if rerouted_to:
-                logger.warning(
-                    "Forced-persona filter would discard the ENTIRE generation: "
-                    f"model spoke as {spoke_before} but only {sorted(forced_personas)} "
-                    f"{'was' if len(forced_personas) == 1 else 'were'} addressed. "
-                    f"Rerouted to {rerouted_to} instead of dead air."
+            # Routing directive: specific personas were addressed but we're on
+            # the unified call (flag off, @Girls never reaches here with a
+            # forced set). Tell the model; output is also filtered below.
+            if forced_personas:
+                names = ", ".join(sorted(p.capitalize() for p in forced_personas))
+                was = "was" if len(forced_personas) == 1 else "were"
+                directive = (
+                    f"[Routing: only {names} {was} directly addressed this turn. "
+                    f"Only they should respond; everyone else stays silent.]"
                 )
+                contextual_primer = (
+                    f"{contextual_primer}\n\n{directive}" if contextual_primer else directive
+                )
+
+            # Single unified LLM call
+            response_text = await self._generate(
+                user_input=user_input,
+                contextual_primer=contextual_primer,
+                conversation_history=conversation_history,
+            )
+
+            # Parse response into an ordered scene
+            if self._output_format == "transcript":
+                turns = parse_house_transcript(
+                    response_text,
+                    valid_personas=self.personas,
+                    default_persona=self._fallback_persona,
+                )
+            elif self._output_format == "json":
+                turns = parse_house_turns(
+                    response_text,
+                    valid_personas=self.personas,
+                    default_persona=self._fallback_persona,
+                )
+            else:
+                # Plain-text mode: entire response goes to the fallback persona.
+                # Intended for single-persona configurations where structured
+                # shaping is dead weight on the model.
+                text = response_text.strip()
+                turns = [{"persona": self._fallback_persona, "text": text}] if text else []
+
+            # Visibility: who the model actually chose to speak as, before any
+            # forced-persona filtering. The ground truth of the generation.
+            spoke_before = list(dict.fromkeys(t["persona"] for t in turns))
+            logger.info(
+                f"Model produced {len(turns)} turn(s) from: {spoke_before or 'NONE'}"
+                + (f" | forced={sorted(forced_personas)}" if forced_personas else "")
+            )
+
+            # Hard guarantee: when specific personas were addressed, silence
+            # anyone else the model let speak anyway (with a dead-air safeguard).
+            if forced_personas:
+                turns, rerouted_to = apply_forced_personas(
+                    turns, forced_personas, self._fallback_persona
+                )
+                if rerouted_to:
+                    logger.warning(
+                        "Forced-persona filter would discard the ENTIRE generation: "
+                        f"model spoke as {spoke_before} but only {sorted(forced_personas)} "
+                        f"{'was' if len(forced_personas) == 1 else 'were'} addressed. "
+                        f"Rerouted to {rerouted_to} instead of dead air."
+                    )
 
         # Wire tap: the parsed scene as it will actually dispatch. Compared
         # against the llm_call record, this shows what the parser kept,
@@ -353,6 +428,82 @@ class UnifiedOrchestrator:
                 logger.error(f"Unified generation unavailable ({category.value}): {e}")
                 raise HouseUnavailableError(category) from e
             logger.error(f"Unified generation failed: {e}", exc_info=True)
+            return ""
+
+    # ── Solo / per-persona generation ────────────────────────────
+
+    async def _generate_persona_scene(
+        self,
+        personas_ordered: List[str],
+        user_input: str,
+        contextual_primer: Optional[str] = None,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> List[Dict[str, str]]:
+        """Generate an addressed scene as one dedicated call per persona.
+
+        Personas speak in the order they were addressed. Each call uses that
+        persona's solo prompt and sees the turns already produced this scene
+        (prepended to its primer as a short "[In the room just now:]" block),
+        so a later persona can react to an earlier one — cross-talk without a
+        shared generation. Calls are sequential by necessity (persona N depends
+        on N-1's output), so latency is additive. A persona whose call yields
+        empty/degenerate text is dropped; the rest still speak.
+        """
+        turns: List[Dict[str, str]] = []
+        for persona in personas_ordered:
+            primer = contextual_primer
+            scene_so_far = self._format_scene_so_far(turns)
+            if scene_so_far:
+                primer = f"{primer}\n\n{scene_so_far}" if primer else scene_so_far
+
+            raw = await self._generate_solo(
+                system_prompt=self._solo_prompts[persona],
+                user_input=user_input,
+                contextual_primer=primer,
+                conversation_history=conversation_history,
+            )
+            text = clean_persona_text(persona, raw)
+            if text:
+                turns.append({"persona": persona, "text": text})
+        return turns
+
+    @staticmethod
+    def _format_scene_so_far(turns: List[Dict[str, str]]) -> Optional[str]:
+        """Render turns produced so far this scene, for the next persona to see."""
+        if not turns:
+            return None
+        lines = [f"{t['persona'].capitalize()}: {t['text']}" for t in turns]
+        return "[In the room just now:]\n" + "\n".join(lines)
+
+    async def _generate_solo(
+        self,
+        system_prompt: str,
+        user_input: str,
+        contextual_primer: Optional[str] = None,
+        conversation_history: Optional[List[Dict]] = None,
+    ) -> str:
+        """Run one persona's solo LLM call — plain prose, no json_mode.
+
+        Mirrors _generate's error handling: rate-limit / out-of-credits raise
+        HouseUnavailableError (a genuine outage the Discord layer surfaces),
+        everything else degrades to "" so the remaining personas still speak.
+        """
+        try:
+            result = await asyncio.to_thread(
+                self._provider.generate,
+                prompt=user_input,
+                system_prompt=system_prompt,
+                contextual_primer=contextual_primer,
+                conversation_history=conversation_history,
+                json_mode=False,
+            )
+            return result.text
+        except Exception as e:
+            category = self._provider.classify_error(e)
+            if category in (ErrorCategory.RATE_LIMIT, ErrorCategory.INSUFFICIENT_CREDITS):
+                logger.error(f"Solo generation unavailable ({category.value}): {e}")
+                raise HouseUnavailableError(category) from e
+            logger.error(f"Solo generation failed: {e}", exc_info=True)
             return ""
 
     # ── Post-Processing ──────────────────────────────────────────
