@@ -88,6 +88,75 @@ def parse_house_turns(
     return _default_turn(default_persona, raw_text)
 
 
+def _transcript_label_re(valid_personas: List[str]):
+    """A line that begins a turn: '[Frank]:', 'Frank:', '**Frank**:', '- Frank:'.
+
+    Leading brackets/emphasis/list-markers are tolerated so parsing survives
+    however the model decorates the label — the history shows the bracketed
+    '[frank]:' form, so the model may echo it.
+    """
+    names = "|".join(re.escape(p) for p in sorted(valid_personas, key=len, reverse=True))
+    return re.compile(
+        rf"^\s{{0,4}}[\[\*\->]{{0,3}}\s*({names})\s*[\]\*]{{0,3}}\s*:\s*(.*)$",
+        re.IGNORECASE,
+    )
+
+
+def parse_house_transcript(
+    raw_text: str,
+    valid_personas: List[str],
+    default_persona: str = "elvira",
+) -> List[Dict[str, str]]:
+    """Parse a labeled-transcript scene into ordered turns.
+
+    Expected model output — one speaker per line-start; a turn's text may run
+    onto following lines until the next speaker label:
+
+        Frank: Look, I'm gonna be straight with you...
+        Zagna: What Frank said. Also I made you a sandwich...
+        Frank: *reaching to claim it* The sandwich is real...
+
+    Reuses the same per-turn guards as the JSON path (repetition, truncation,
+    MAX_TURNS). If no persona labels are found, defers to the JSON/prose
+    fallback chain — so a model that emits JSON anyway, or label-less prose,
+    still degrades gracefully instead of being dropped.
+    """
+    raw_text = raw_text.strip()
+    if not raw_text:
+        logger.warning("Empty response from model, falling back to default persona")
+        return [{"persona": default_persona, "text": "[No response generated]"}]
+
+    label_re = _transcript_label_re(valid_personas)
+
+    grouped: List[list] = []  # [persona, [text lines]]
+    for line in raw_text.splitlines():
+        m = label_re.match(line)
+        if m:
+            grouped.append([m.group(1).lower(), [m.group(2)]])
+        elif grouped:
+            # Continuation of the current speaker's turn (multi-line/paragraph)
+            grouped[-1][1].append(line)
+        # else: prose before the first label — ignored
+
+    if not grouped:
+        # No labels at all — could be JSON, or label-less prose. Defer to the
+        # JSON/prose chain so nothing is silently dropped.
+        logger.info("No transcript labels found — using JSON/prose fallback")
+        return parse_house_turns(raw_text, valid_personas, default_persona)
+
+    turns: List[Dict[str, str]] = []
+    for persona, lines in grouped:
+        text = _clean_text(persona, "\n".join(lines).strip())
+        if text is None:
+            continue
+        turns.append({"persona": persona, "text": text})
+        if len(turns) >= MAX_TURNS:
+            logger.warning(f"Scene exceeded {MAX_TURNS} turns — dropping the rest")
+            break
+
+    return turns
+
+
 def _try_parse_json(text: str):
     """Try multiple strategies to extract JSON from text."""
 

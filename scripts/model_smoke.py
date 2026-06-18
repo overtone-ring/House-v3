@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from src.providers import create_provider_from_config
-from src.response_parser import parse_house_turns
+from src.response_parser import parse_house_turns, parse_house_transcript
 
 # Paid OpenRouter pricing for gemma-4-31b-it, $/1M tokens (in, out)
 PRICE_IN, PRICE_OUT = 0.12, 0.37
@@ -47,7 +47,11 @@ def main():
 
     config = yaml.safe_load((ROOT / "config" / "default.yaml").read_text())
     personas = config["personas"]
-    fallback = config.get("unified", {}).get("fallback_persona", personas[0])
+    unified_cfg = config.get("unified", {})
+    fallback = unified_cfg.get("fallback_persona", personas[0])
+    output_format = str(
+        unified_cfg.get("output_format", "json" if unified_cfg.get("json_mode", True) else "plain")
+    ).lower()
 
     prov_cfg = dict(config["provider"])
     prov_cfg["model"] = model
@@ -66,14 +70,15 @@ def main():
             result = provider.generate(
                 prompt=msg,
                 system_prompt=system_prompt,
-                json_mode=True,
+                json_mode=(output_format == "json"),
             )
         except Exception as e:
             print(f"  !! generation failed: {type(e).__name__}: {e}")
             continue
         latency = time.monotonic() - start
 
-        turns = parse_house_turns(
+        parse = parse_house_transcript if output_format == "transcript" else parse_house_turns
+        turns = parse(
             result.text, valid_personas=personas, default_persona=fallback
         )
 

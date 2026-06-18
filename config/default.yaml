@@ -68,8 +68,15 @@ context:
 # Replaces the old arbitrator + per-persona orchestrator pipeline.
 unified:
   system_prompt_file: data/personas/unified_house.md
-  json_mode: true        # Request structured JSON output from the model (multi-persona only)
-  fallback_persona: elvira  # If JSON parsing fails, assign response to this persona
+  # Output format the model is asked to produce and we parse back:
+  #   transcript — labeled lines "Name: ..." (one turn per label). Lighter on
+  #     the model than strict JSON and immune to the malformed-JSON-shape
+  #     failure (e.g. "[false, 2025]") seen under deep context.
+  #   json       — {"turns":[{"speaker","text"}]} via json_mode response_format.
+  #   plain      — whole reply → fallback_persona (single-persona setups).
+  output_format: transcript
+  json_mode: true        # Only consulted when output_format is unset (legacy)
+  fallback_persona: elvira  # If parsing fails, assign response to this persona
 
 # ── TTS (Text-to-Speech) ────────────────────────────────────────────
 tts:

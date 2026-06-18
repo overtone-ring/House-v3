@@ -40,7 +40,7 @@ from .context.formatters import format_unified_context
 from .services.memory_service import MemoryService
 from .services.state_manager import get_state_manager, StateManager
 from .services.query_inference_service import create_query_inference_service
-from .response_parser import parse_house_turns
+from .response_parser import parse_house_turns, parse_house_transcript
 from .utils.wire_log import wire_record, new_request_id
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,15 @@ class UnifiedOrchestrator:
             "system_prompt_file", "data/personas/unified_house.md"
         )
         self._json_mode = unified_cfg.get("json_mode", True)
+        # Output format the model is asked for and we parse back:
+        #   "transcript" — labeled lines ("Name: ..."); lighter on the model
+        #                  and immune to the malformed-JSON-shape failure.
+        #   "json"       — {"turns": [...]} via json_mode response_format.
+        #   "plain"      — whole reply → fallback_persona (single-persona).
+        # Defaults preserve old behavior when output_format is unset.
+        self._output_format = str(
+            unified_cfg.get("output_format", "json" if self._json_mode else "plain")
+        ).lower()
         self._fallback_persona = unified_cfg.get("fallback_persona", self.default_persona)
 
         # Components (initialized in initialize())
@@ -245,7 +254,13 @@ class UnifiedOrchestrator:
         )
 
         # Step 5: Parse response into an ordered scene
-        if self._json_mode:
+        if self._output_format == "transcript":
+            turns = parse_house_transcript(
+                response_text,
+                valid_personas=self.personas,
+                default_persona=self._fallback_persona,
+            )
+        elif self._output_format == "json":
             turns = parse_house_turns(
                 response_text,
                 valid_personas=self.personas,
@@ -253,8 +268,8 @@ class UnifiedOrchestrator:
             )
         else:
             # Plain-text mode: entire response goes to the fallback persona.
-            # Intended for single-persona configurations where JSON shaping
-            # is dead weight on the model.
+            # Intended for single-persona configurations where structured
+            # shaping is dead weight on the model.
             text = response_text.strip()
             turns = [{"persona": self._fallback_persona, "text": text}] if text else []
 
@@ -324,7 +339,9 @@ class UnifiedOrchestrator:
                 system_prompt=self._unified_prompt,
                 contextual_primer=contextual_primer,
                 conversation_history=conversation_history,
-                json_mode=self._json_mode,
+                # Only request a JSON response_format when we actually parse
+                # JSON — transcript/plain modes must not constrain the model.
+                json_mode=(self._output_format == "json"),
             )
             return result.text
         except Exception as e:
